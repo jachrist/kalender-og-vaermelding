@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#2f6f4f" />
+  <title>Hytteportal</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__inner">
+      <span class="brand">🏔️ Hytteportal</span>
+      <select id="cabin-picker" class="cabin-picker" aria-label="Velg hytte"></select>
+    </div>
+  </header>
+
+  <main class="content" id="content">
+    <section class="panel" id="panel-bruk" hidden>
+      <h1>Bruk</h1>
+      <p class="muted">Hvem bruker hytta når. Reservasjoner og booking-kalender.</p>
+      <div class="placeholder">Kalender kommer her.</div>
+    </section>
+
+    <section class="panel" id="panel-innkjop" hidden>
+      <h1>Innkjøp</h1>
+      <p class="muted">Felles handleliste og hvem som har lagt ut for hva.</p>
+      <div class="placeholder">Handleliste kommer her.</div>
+    </section>
+
+    <section class="panel" id="panel-vedlikehold" hidden>
+      <h1>Vedlikehold</h1>
+      <p class="muted">Oppgaver, dugnader og status per hytte.</p>
+      <div class="placeholder">Vedlikeholdslogg kommer her.</div>
+    </section>
+  </main>
+
+  <nav class="tabbar" role="tablist">
+    <button class="tab" data-panel="bruk" aria-label="Bruk">
+      <span class="tab__icon">📅</span><span class="tab__label">Bruk</span>
+    </button>
+    <button class="tab" data-panel="innkjop" aria-label="Innkjøp">
+      <span class="tab__icon">🛒</span><span class="tab__label">Innkjøp</span>
+    </button>
+    <button class="tab" data-panel="vedlikehold" aria-label="Vedlikehold">
+      <span class="tab__icon">🔧</span><span class="tab__label">Vedlikehold</span>
+    </button>
+  </nav>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
