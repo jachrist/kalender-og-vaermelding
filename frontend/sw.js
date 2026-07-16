@@ -1,7 +1,11 @@
 // Service worker for Hytteportal.
-// App-skallet caches (cache-first). API-kall går alltid til nettverket.
+//
+// Strategi:
+//  - API-kall (/api/ eller Functions-porten): alltid nettverk, aldri cache.
+//  - Statiske filer (same-origin GET): network-first med cache-fallback, slik at
+//    oppdateringer forplanter seg uten byggsteg, men appen fungerer offline.
 
-const CACHE = "hytteportal-v1";
+const CACHE = "hytteportal-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -9,6 +13,13 @@ const APP_SHELL = [
   "./css/style.css",
   "./js/app.js",
   "./js/api.js",
+  "./js/auth.js",
+  "./js/dom.js",
+  "./js/dates.js",
+  "./js/views/booking.js",
+  "./js/views/purchases.js",
+  "./js/views/maintenance.js",
+  "./js/views/admin.js",
   "./icons/icon.svg",
 ];
 
@@ -20,9 +31,9 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
@@ -31,11 +42,16 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
 
   const url = new URL(request.url);
-  // API-kall: alltid nettverk (ikke cache dynamiske data).
-  if (url.pathname.startsWith("/api/") || url.port === "7071") return;
+  if (url.origin !== location.origin) return;             // API på annen origin (lokal :7071)
+  if (url.pathname.startsWith("/api/")) return;           // API på samme origin (produksjon)
 
-  // App-skall: cache-first med nettverks-fallback.
   event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request))
+    fetch(request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(request).then((cached) => cached || caches.match("./index.html")))
   );
 });

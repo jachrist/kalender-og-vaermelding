@@ -3,9 +3,19 @@
   "Values": {
     "FUNCTIONS_WORKER_RUNTIME": "node",
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-    "SQLITE_DB_PATH": "./data/hytteportal.db"
+    "SQLITE_DB_PATH": "./data/hytteportal.db",
+
+    "ADMIN_EMAIL": "din-epost@example.com",
+    "ADMIN_NAME": "Ditt Navn",
+
+    "TENANT_ID": "",
+    "GRAPH_CLIENT_ID": "",
+    "GRAPH_CLIENT_SECRET": "",
+    "MAIL_SENDER": "hytteportal@dittdomene.no",
+    "MAIL_FROM_NAME": "Hytteportal"
   },
   "Host": {
-    "CORS": "*"
+    "CORS": "*",
+    "CORSCredentials": false
   }
 }

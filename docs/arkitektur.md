@@ -46,26 +46,48 @@ Alternativer dersom skrivelast eller samtidighet vokser: Azure SQL, PostgreSQL
 Flexible Server, eller Cosmos DB. Datalaget er isolert i `api/src/db.js`, så et
 bytte påvirker ikke resten av API-et nevneverdig.
 
-## Datamodell (skisse)
+## Datamodell
 
-Startpunkt — konkretiseres når kravene beskrives nærmere.
+Se `api/src/db.js` for autoritativt skjema (opprettes/migreres ved oppstart).
 
-| Tabell         | Nøkkelfelt (skisse)                                             |
-|----------------|----------------------------------------------------------------|
-| `cabins`       | id, name, location, created_at                                 |
-| `bookings`     | id, cabin_id, member, from_date, to_date, note                 |
-| `purchases`    | id, cabin_id, title, needed/bought, amount, paid_by, created_at |
-| `maintenance`  | id, cabin_id, title, status, due_date, assigned_to, note       |
+| Tabell               | Nøkkelfelt                                                              |
+|----------------------|------------------------------------------------------------------------|
+| `members`            | id, email (unik), name, role (`admin`/`member`), created_at            |
+| `otp_codes`          | id, email, code_hash, expires_at                                       |
+| `tokens`             | token_hash (PK), member_id, expires_at                                 |
+| `cabins`             | id, name (unik), sort_order                                            |
+| `bookings`           | id, cabin_id, member_id, member_name, start_date, end_date, note       |
+| `purchases`          | id, cabin_id, title, comment, price, bought, bought_by_name, created_by, source |
+| `recurring_expenses` | id, cabin_id, title, comment, price, day_of_month, active, last_generated |
+| `maintenance`        | id, cabin_id, title, description, status, due_date, created_by         |
 
-Tre hytter deler samme skjema; alt knyttes til en `cabin_id`.
+De fire hyttene (Gartha rød, Gartha hvit, Gartha anneks, Skeikampen) seedes ved
+første oppstart. Alt domenedata knyttes til en `cabin_id`.
 
-## Autentisering (åpent spørsmål)
+### Faste utgifter
+`recurring_expenses` materialiseres til `purchases` (med `source = 'recurring'`)
+én gang per måned, når dagens dato har passert `day_of_month`. Idempotent via
+`last_generated` (`YYYY-MM`). Kjøres av en daglig timer-funksjon
+(`recurring-timer`) og kan trigges manuelt av admin (`POST /api/recurring/run`).
 
-Foreløpig ingen auth. Aktuelle veier for en liten, lukket familiegruppe:
-- Azure Functions `authLevel` + delt nøkkel (enkelt, men grovt).
-- Azure Static Web Apps innebygde auth (Microsoft/Google-innlogging) med
-  rollestyring — passer godt til en PWA + Functions-oppsett.
-- E-post-OTP (som i korportal-prosjektet) hvis vi vil unngå eksterne
-  identitetsleverandører.
+## Autentisering
 
-Avklares sammen med kravene.
+Implementert med e-post-OTP og opake tokens — håndheves server-side:
+
+- **Register**: kun e-poster i `members` kan logge inn. Admin forvalter registeret.
+- **Engangskode**: 6 sifre, 10 min levetid, lagret kun som SHA-256-hash i `otp_codes`.
+- **Token**: tilfeldig streng (32 byte) lagret som hash i `tokens`, 30 dagers
+  levetid. Klienten lagrer klartekst-tokenet i `localStorage` og sender det som
+  `Authorization: Bearer …`. `requireAuth`/`requireAdmin` i `api/src/auth.js`
+  validerer på hvert kall.
+- **Roller**: `admin` (full tilgang, medlemsforvaltning) og `member`. Første admin
+  seedes fra `ADMIN_EMAIL`.
+
+### E-post via Microsoft Graph
+Engangskoder sendes med Graph `sendMail` på samme M365-tenant som Functions kjører
+på, via client credentials (app-tillatelsen `Mail.Send`). Konfigureres med
+`TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` og `MAIL_SENDER`. Er ikke
+Graph konfigurert, logges koden i stedet (lokal utvikling uten hemmeligheter).
+
+Alternativ: SMTP AUTH mot `smtp.office365.com` — men Microsoft faser ut SMTP basic
+auth, så Graph er anbefalt for nye løsninger.

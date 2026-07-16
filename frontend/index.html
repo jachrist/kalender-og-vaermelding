@@ -11,44 +11,25 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="topbar__inner">
-      <span class="brand">🏔️ Hytteportal</span>
-      <select id="cabin-picker" class="cabin-picker" aria-label="Velg hytte"></select>
-    </div>
-  </header>
+  <!-- Innloggingsskjerm -->
+  <div id="login" hidden></div>
 
-  <main class="content" id="content">
-    <section class="panel" id="panel-bruk" hidden>
-      <h1>Bruk</h1>
-      <p class="muted">Hvem bruker hytta når. Reservasjoner og booking-kalender.</p>
-      <div class="placeholder">Kalender kommer her.</div>
-    </section>
+  <!-- App -->
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <span class="brand">🏔️ Hytteportal</span>
+        <div class="topbar__right">
+          <select id="cabin-picker" class="cabin-picker" aria-label="Velg hytte"></select>
+          <button id="user-btn" class="user-btn" aria-label="Bruker og utlogging"></button>
+        </div>
+      </div>
+    </header>
 
-    <section class="panel" id="panel-innkjop" hidden>
-      <h1>Innkjøp</h1>
-      <p class="muted">Felles handleliste og hvem som har lagt ut for hva.</p>
-      <div class="placeholder">Handleliste kommer her.</div>
-    </section>
+    <main class="content" id="content"></main>
 
-    <section class="panel" id="panel-vedlikehold" hidden>
-      <h1>Vedlikehold</h1>
-      <p class="muted">Oppgaver, dugnader og status per hytte.</p>
-      <div class="placeholder">Vedlikeholdslogg kommer her.</div>
-    </section>
-  </main>
-
-  <nav class="tabbar" role="tablist">
-    <button class="tab" data-panel="bruk" aria-label="Bruk">
-      <span class="tab__icon">📅</span><span class="tab__label">Bruk</span>
-    </button>
-    <button class="tab" data-panel="innkjop" aria-label="Innkjøp">
-      <span class="tab__icon">🛒</span><span class="tab__label">Innkjøp</span>
-    </button>
-    <button class="tab" data-panel="vedlikehold" aria-label="Vedlikehold">
-      <span class="tab__icon">🔧</span><span class="tab__label">Vedlikehold</span>
-    </button>
-  </nav>
+    <nav class="tabbar" id="tabbar" role="tablist"></nav>
+  </div>
 
   <script type="module" src="js/app.js"></script>
 </body>
