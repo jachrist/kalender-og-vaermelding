@@ -1,0 +1,54 @@
+# Deploy av Hytteportal til Azure Static Web Apps (frontend + Functions-API sammen).
+#
+# Engangsoppsett før første deploy:
+#   1. Opprett en Static Web App i Azure-portalen. Velg "Other" som kilde (så
+#      Azure ikke lager sin egen workflow — vi bruker denne).
+#   2. Hent deployment-token: SWA-ressurs -> "Manage deployment token".
+#   3. Legg det inn som repo-secret AZURE_STATIC_WEB_APPS_API_TOKEN
+#      (GitHub -> Settings -> Secrets and variables -> Actions).
+#   4. Sett app-innstillinger i SWA (Configuration): ADMIN_EMAIL, TENANT_ID,
+#      GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET, MAIL_SENDER, SQLITE_DB_PATH.
+#
+# Kjør deploy: skjer automatisk ved push til main, eller manuelt via
+# "Run workflow" (workflow_dispatch) fra hvilken som helst branch.
+
+name: Azure Static Web Apps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build_and_deploy:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build And Deploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: "frontend"
+          api_location: "api"
+          output_location: ""
+
+  close_pull_request:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request
+    steps:
+      - name: Close Pull Request
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: close

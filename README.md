@@ -129,12 +129,33 @@ localhost, og mot `/api` i produksjon.
 | `MAIL_SENDER`          | Avsender-postboks e-post/UPN                            |
 | `MAIL_FROM_NAME`       | (valgfritt) visningsnavn på avsender                   |
 
-## Deploy (skisse)
+## CI og deploy
 
-- **Frontend**: Azure Static Web Apps (eller nginx). Static Web Apps kan koble
-  `/api` direkte til Functions-appen, så `API_BASE` blir `/api` uten ekstra config.
-- **API**: Azure Functions (Linux, Node 18/20). Monter en Azure Files-share og sett
-  `SQLITE_DB_PATH` dit. Registrer en app med `Mail.Send`-tillatelse for e-post.
+To GitHub Actions-workflows i `.github/workflows/`:
+
+- **`ci.yml`** — kjører ved hver push/PR: syntaks-sjekk av all JS, JSON-validering og
+  testene (`node --test`). Krever ingen hemmeligheter — gir grønne haker med en gang.
+- **`azure-static-web-apps.yml`** — deployer frontend + API til **Azure Static Web Apps**.
+
+### Sette opp deploy (engangsjobb)
+
+1. Opprett en **Static Web App** i Azure-portalen, velg **"Other"** som kilde (så Azure
+   ikke lager sin egen workflow — vi bruker den som ligger i repoet).
+2. Kopier deployment-token (SWA → *Manage deployment token*) og legg det inn som
+   repo-secret **`AZURE_STATIC_WEB_APPS_API_TOKEN`**
+   (GitHub → Settings → Secrets and variables → Actions).
+3. Sett app-innstillinger i SWA (*Configuration*): `ADMIN_EMAIL`, `TENANT_ID`,
+   `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `MAIL_SENDER`.
+4. Deploy skjer automatisk ved push til `main`, eller manuelt via **Run workflow**
+   (workflow_dispatch) fra hvilken som helst branch. SWA ruter `/api/*` til Functions
+   automatisk, så `API_BASE` blir `/api` uten ekstra konfig.
+
+> ⚠️ **SQLite-persistens på SWA sine managed functions:** disse kjører på flyktig disk,
+> så SQLite-databasen nullstilles ved cold start / ny deploy. Det er greit for å **se
+> resultatet** og teste appen (admin seedes ved oppstart), men for varig lagring bør
+> API-et kjøres som en **frittstående Azure Functions-app** med en montert **Azure
+> Files**-share (`SQLITE_DB_PATH` peker dit) og kobles til SWA som *linked backend*.
+> Se `docs/arkitektur.md`.
 
 ## Status
 
