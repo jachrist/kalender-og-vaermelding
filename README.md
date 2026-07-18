@@ -21,8 +21,15 @@ Gartha rød · Gartha hvit · Gartha anneks · Skeikampen
   handlelista hver måned (materialiseres av en timer-funksjon i API-et).
 - **🔧 Vedlikehold** — oppgaveliste med status (åpen/pågår/ferdig) og frist. Alle
   medlemmer kan opprette, redigere og slette.
+- **📖 Hyttebok** — per hytte: innlegg med periode (fra–til) og hvem som var der,
+  skrevet i en **markdown-editor** med opplasting og innliming av bilder (lagres i
+  Azure Blob Storage). Eier eller admin kan redigere/slette.
+- **💬 Chat** — felles chat for alle medlemmer, plain tekst. All historikk beholdes.
 - **⚙️ Admin** — medlemsregister: legg til medlemmer med navn/e-post, sett rolle
   (medlem/administrator), fjern medlemmer.
+
+Admin kan i tillegg **booke og redigere på vegne av andre** («Book for andre» med
+medlemsvelger, og flytte/endre eksisterende reservasjoner).
 
 ## Innlogging
 
@@ -131,6 +138,8 @@ localhost, og mot `/api` i produksjon.
 | `SQL_PASSWORD`         | SQL-passord                                            |
 | `SQL_CONNECTION_STRING`| (valgfritt) hele tilkoblingsstrengen — overstyrer feltene over |
 | `SQL_TRUST_CERT`       | (valgfritt) `true` kun for lokal SQL Server m/selvsignert sert |
+| `BLOB_CONNECTION_STRING`| Tilkoblingsstreng til Azure Storage (bilder i Hytteboka)      |
+| `BLOB_CONTAINER`       | (valgfritt) blob-container, standard `hyttebok`               |
 | `ADMIN_EMAIL`          | E-post som seedes som første administrator             |
 | `ADMIN_NAME`           | Visningsnavn for admin                                 |
 | `TENANT_ID`            | M365 tenant (directory) ID for Graph                   |
@@ -155,8 +164,8 @@ To GitHub Actions-workflows i `.github/workflows/`:
    repo-secret **`AZURE_STATIC_WEB_APPS_API_TOKEN`**
    (GitHub → Settings → Secrets and variables → Actions).
 3. Sett app-innstillinger i SWA (*Configuration*): `SQL_SERVER`, `SQL_DATABASE`,
-   `SQL_USER`, `SQL_PASSWORD`, `ADMIN_EMAIL`, `TENANT_ID`, `GRAPH_CLIENT_ID`,
-   `GRAPH_CLIENT_SECRET`, `MAIL_SENDER`.
+   `SQL_USER`, `SQL_PASSWORD`, `BLOB_CONNECTION_STRING`, `ADMIN_EMAIL`, `TENANT_ID`,
+   `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `MAIL_SENDER`.
 4. Deploy skjer automatisk ved push til `main`, eller manuelt via **Run workflow**
    (workflow_dispatch) fra hvilken som helst branch. SWA ruter `/api/*` til Functions
    automatisk, så `API_BASE` blir `/api` uten ekstra konfig.

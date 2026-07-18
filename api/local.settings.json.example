@@ -10,6 +10,9 @@
     "SQL_PASSWORD": "",
     "SQL_TRUST_CERT": "false",
 
+    "BLOB_CONNECTION_STRING": "",
+    "BLOB_CONTAINER": "hyttebok",
+
     "ADMIN_EMAIL": "din-epost@example.com",
     "ADMIN_NAME": "Ditt Navn",
 

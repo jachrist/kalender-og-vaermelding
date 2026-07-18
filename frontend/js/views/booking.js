@@ -77,10 +77,15 @@ export function bookingView(container, ctx) {
       root.append(row);
     }
 
-    // "Ny reservasjon"-knapp
+    // "Ny reservasjon"-knapp (+ "Book for andre" for admin)
     root.append(
       el("button.btn.btn--primary.btn--block", { onclick: () => openForm() }, "+ Ny reservasjon")
     );
+    if (session.member.role === "admin") {
+      root.append(
+        el("button.btn.btn--block", { onclick: () => openForm({ forOther: true }) }, "👥 Book for andre")
+      );
+    }
 
     // Liste over kommende reservasjoner
     const upcoming = bookings
@@ -96,6 +101,9 @@ export function bookingView(container, ctx) {
             el("div.row-title", {}, formatRange(b.start_date, b.end_date)),
             el("div.row-sub", {}, b.member_name + (b.note ? ` · ${b.note}` : ""))
           ),
+          canDelete
+            ? el("button.iconbtn", { onclick: () => openForm({ booking: b }), "aria-label": "Endre" }, "✏️")
+            : null,
           canDelete
             ? el("button.iconbtn.iconbtn--danger", { onclick: () => remove(b), "aria-label": "Slett" }, "🗑")
             : null
@@ -123,20 +131,41 @@ export function bookingView(container, ctx) {
     openForm(dstr);
   }
 
-  function openForm(startDate) {
-    const start = el("input.input", { type: "date", value: startDate || "" });
-    const end = el("input.input", { type: "date", value: startDate || "" });
-    const note = el("input.input", { type: "text", placeholder: "Notat (valgfritt)" });
+  async function openForm(opts = {}) {
+    const booking = opts.booking || null;
+    const isEdit = !!booking;
+    const isAdmin = session.member.role === "admin";
+    const startDate = typeof opts === "string" ? opts : opts.startDate;
+
+    const start = el("input.input", { type: "date", value: booking?.start_date || startDate || "" });
+    const end = el("input.input", { type: "date", value: booking?.end_date || startDate || "" });
+    const note = el("input.input", { type: "text", placeholder: "Notat (valgfritt)", value: booking?.note || "" });
+
+    // Medlemsvelger — kun admin (for "Book for andre" og for å flytte reservasjon).
+    let memberSelect = null;
+    if (isAdmin) {
+      memberSelect = el("select.select");
+      memberSelect.append(el("option", { value: session.member.id }, `${session.member.name} (meg)`));
+      try {
+        const members = await api.members();
+        for (const m of members) {
+          if (m.id === session.member.id) continue;
+          memberSelect.append(el("option", { value: m.id }, m.name));
+        }
+      } catch { /* faller tilbake til bare meg */ }
+      if (booking) memberSelect.value = booking.member_id;
+    }
 
     const dialog = el("div.modal-backdrop", { onclick: (e) => { if (e.target === dialog) dialog.remove(); } },
       el("div.modal", {},
-        el("h3", {}, "Ny reservasjon"),
+        el("h3", {}, isEdit ? "Endre reservasjon" : "Ny reservasjon"),
+        memberSelect ? el("label.field", {}, "For hvem", memberSelect) : null,
         el("label.field", {}, "Fra", start),
         el("label.field", {}, "Til", end),
         el("label.field", {}, "Notat", note),
         el("div.modal-actions", {},
           el("button.btn", { onclick: () => dialog.remove() }, "Avbryt"),
-          el("button.btn.btn--primary", { onclick: submit }, "Reservér")
+          el("button.btn.btn--primary", { onclick: submit }, isEdit ? "Lagre" : "Reservér")
         )
       )
     );
@@ -145,14 +174,17 @@ export function bookingView(container, ctx) {
 
     async function submit() {
       if (!start.value || !end.value) return toast("Velg fra- og til-dato", "error");
+      const payload = {
+        start_date: start.value,
+        end_date: end.value,
+        note: note.value.trim() || undefined,
+      };
+      if (memberSelect) payload.member_id = memberSelect.value;
       try {
-        await api.createBooking(ctx.cabinId, {
-          start_date: start.value,
-          end_date: end.value,
-          note: note.value.trim() || undefined,
-        });
+        if (isEdit) await api.updateBooking(booking.id, payload);
+        else await api.createBooking(ctx.cabinId, payload);
         dialog.remove();
-        toast("Reservasjon lagret", "success");
+        toast(isEdit ? "Reservasjon oppdatert" : "Reservasjon lagret", "success");
         renderMonth();
       } catch (err) {
         toast(err.message, "error");

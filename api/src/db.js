@@ -245,6 +245,36 @@ async function migrate(pool) {
     );
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_maintenance_cabin' AND object_id = OBJECT_ID(N'dbo.maintenance'))
     CREATE INDEX idx_maintenance_cabin ON maintenance(cabin_id);
+
+    -- Felles chat for alle medlemmer. Plain tekst, all historikk beholdes.
+    IF OBJECT_ID(N'dbo.chat_messages', N'U') IS NULL
+    CREATE TABLE chat_messages (
+      id          NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      member_id   NVARCHAR(36)  NULL REFERENCES members(id) ON DELETE SET NULL,
+      member_name NVARCHAR(200) NOT NULL,
+      body        NVARCHAR(MAX) NOT NULL,
+      created_at  DATETIME2     NOT NULL CONSTRAINT DF_chat_created DEFAULT SYSUTCDATETIME()
+    );
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_chat_created' AND object_id = OBJECT_ID(N'dbo.chat_messages'))
+    CREATE INDEX idx_chat_created ON chat_messages(created_at);
+
+    -- Hyttebok per hytte: markdown-innlegg med periode og hvem som var der.
+    -- Bilder lagres i Blob Storage og refereres som URL i markdown-teksten (body).
+    IF OBJECT_ID(N'dbo.logbook_entries', N'U') IS NULL
+    CREATE TABLE logbook_entries (
+      id              NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      cabin_id        NVARCHAR(36)  NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
+      member_id       NVARCHAR(36)  NULL REFERENCES members(id) ON DELETE SET NULL,
+      created_by_name NVARCHAR(200) NOT NULL,
+      period_from     NVARCHAR(10)  NULL,   -- 'YYYY-MM-DD'
+      period_to       NVARCHAR(10)  NULL,   -- 'YYYY-MM-DD'
+      participants    NVARCHAR(MAX) NULL,   -- fritekst: hvem som var der
+      body            NVARCHAR(MAX) NOT NULL, -- markdown
+      created_at      DATETIME2     NOT NULL CONSTRAINT DF_logbook_created DEFAULT SYSUTCDATETIME(),
+      updated_at      DATETIME2     NOT NULL CONSTRAINT DF_logbook_updated DEFAULT SYSUTCDATETIME()
+    );
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_logbook_cabin' AND object_id = OBJECT_ID(N'dbo.logbook_entries'))
+    CREATE INDEX idx_logbook_cabin ON logbook_entries(cabin_id);
   `);
 }
 
