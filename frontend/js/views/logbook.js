@@ -90,7 +90,7 @@ export function logbookView(container, ctx) {
     }
 
     const preview = el("div.logbook-body.md-preview", { hidden: true });
-    const fileInput = el("input", { type: "file", accept: "image/*", hidden: true });
+    const fileInput = el("input", { type: "file", accept: "image/*,.heic,.heif", hidden: true });
     fileInput.addEventListener("change", () => uploadPicked());
 
     const imgBtn = el("button.btn.btn--sm", { type: "button", onclick: () => fileInput.click() }, "🖼 Bilde");
@@ -115,7 +115,7 @@ export function logbookView(container, ctx) {
       const file = fileInput.files && fileInput.files[0];
       fileInput.value = "";
       if (!file) return;
-      if (file.size > 8 * 1024 * 1024) return toast("Bildet er for stort (maks 8 MB)", "error");
+      if (file.size > 12 * 1024 * 1024) return toast("Bildet er for stort (maks 12 MB)", "error");
       imgBtn.disabled = true;
       imgBtn.textContent = "⏳ Laster opp …";
       try {
