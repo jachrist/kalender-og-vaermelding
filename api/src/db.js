@@ -275,6 +275,10 @@ async function migrate(pool) {
     );
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_logbook_cabin' AND object_id = OBJECT_ID(N'dbo.logbook_entries'))
     CREATE INDEX idx_logbook_cabin ON logbook_entries(cabin_id);
+
+    -- Overskrift på hyttebok-innlegg (lagt til senere; nullbar for eldre innlegg).
+    IF COL_LENGTH('dbo.logbook_entries', 'title') IS NULL
+      ALTER TABLE logbook_entries ADD title NVARCHAR(300) NULL;
   `);
 }
 

@@ -242,6 +242,7 @@ body {
 .logbook-entry { }
 .logbook-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .logbook-meta { min-width: 0; }
+.logbook-title { margin: 0 0 4px; font-size: 1.15rem; line-height: 1.25; }
 .logbook-period { font-weight: 700; }
 .logbook-people { font-size: 0.9rem; margin-top: 2px; }
 .logbook-actions { display: flex; gap: 2px; flex-shrink: 0; }
