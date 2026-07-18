@@ -101,6 +101,9 @@ function renderActive() {
   for (const btn of tabbarEl.querySelectorAll(".tab")) {
     btn.setAttribute("aria-selected", btn.dataset.tab === activeTab ? "true" : "false");
   }
+  // Hyttevelgeren er irrelevant på hytte-uavhengige faner (Chat er felles, Admin
+  // gjelder medlemmer). Skjul den der så det er tydelig at innholdet er felles.
+  cabinPicker.style.visibility = tab.global || tab.adminOnly ? "hidden" : "visible";
   clear(contentEl);
   if (!activeCabinId && !tab.adminOnly && !tab.global) {
     contentEl.append(el("p.muted.pad", {}, "Ingen hytter tilgjengelig."));
