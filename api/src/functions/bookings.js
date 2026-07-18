@@ -1,6 +1,6 @@
 const { app } = require("@azure/functions");
 const { randomUUID } = require("node:crypto");
-const { getDb } = require("../db");
+const { query, queryOne, exec, withTx } = require("../db");
 const { json, error, withHandler } = require("../http");
 const { requireAuth } = require("../auth");
 
@@ -19,11 +19,10 @@ app.http("bookings-list", {
   authLevel: "anonymous",
   route: "cabins/{cabinId}/bookings",
   handler: withHandler(async (request) => {
-    requireAuth(request);
+    await requireAuth(request);
     const cabinId = request.params.cabinId;
     const from = request.query.get("from");
     const to = request.query.get("to");
-    const db = getDb();
 
     let sql =
       "SELECT id, cabin_id, member_id, member_name, start_date, end_date, note, created_at FROM bookings WHERE cabin_id = ?";
@@ -33,10 +32,11 @@ app.http("bookings-list", {
       sql += " AND start_date <= ? AND end_date >= ?";
       args.push(to, from);
     } else {
-      sql += " AND end_date >= date('now')";
+      // Datoer lagres som 'YYYY-MM-DD'-strenger; sammenlign med dagens dato.
+      sql += " AND end_date >= CONVERT(char(10), GETDATE(), 23)";
     }
     sql += " ORDER BY start_date";
-    return json(db.prepare(sql).all(...args));
+    return json(await query(sql, args));
   }),
 });
 
@@ -47,7 +47,7 @@ app.http("bookings-create", {
   authLevel: "anonymous",
   route: "cabins/{cabinId}/bookings",
   handler: withHandler(async (request) => {
-    const member = requireAuth(request);
+    const member = await requireAuth(request);
     const cabinId = request.params.cabinId;
     const body = (await request.json().catch(() => ({}))) || {};
     const start = String(body.start_date || "").trim();
@@ -59,24 +59,8 @@ app.http("bookings-create", {
     }
     if (end < start) return error(400, "Sluttdato kan ikke være før startdato");
 
-    const db = getDb();
-    if (!db.prepare("SELECT id FROM cabins WHERE id = ?").get(cabinId)) {
+    if (!(await queryOne("SELECT id FROM cabins WHERE id = ?", [cabinId]))) {
       return error(404, "Hytte ikke funnet");
-    }
-
-    // FCFS-overlappsjekk.
-    const clash = db
-      .prepare(
-        `SELECT id, member_name, start_date, end_date FROM bookings
-         WHERE cabin_id = ? AND start_date <= ? AND end_date >= ?
-         LIMIT 1`
-      )
-      .get(cabinId, end, start);
-    if (clash) {
-      return error(
-        409,
-        `Opptatt: ${clash.member_name} har reservert ${clash.start_date}–${clash.end_date}`
-      );
     }
 
     const booking = {
@@ -88,10 +72,30 @@ app.http("bookings-create", {
       end_date: end,
       note,
     };
-    db.prepare(
-      `INSERT INTO bookings (id, cabin_id, member_id, member_name, start_date, end_date, note)
-       VALUES (@id, @cabin_id, @member_id, @member_name, @start_date, @end_date, @note)`
-    ).run(booking);
+
+    // FCFS-overlappsjekk + insert i én serialiserbar transaksjon, med HOLDLOCK
+    // slik at to samtidige forsøk ikke begge slipper forbi sjekken.
+    const clash = await withTx(async (q) => {
+      const rows = await q(
+        `SELECT id, member_name, start_date, end_date FROM bookings WITH (UPDLOCK, HOLDLOCK)
+         WHERE cabin_id = @cabin_id AND start_date <= @end_date AND end_date >= @start_date`,
+        { cabin_id: cabinId, start_date: start, end_date: end }
+      );
+      if (rows[0]) return rows[0];
+      await q(
+        `INSERT INTO bookings (id, cabin_id, member_id, member_name, start_date, end_date, note)
+         VALUES (@id, @cabin_id, @member_id, @member_name, @start_date, @end_date, @note)`,
+        booking
+      );
+      return null;
+    });
+
+    if (clash) {
+      return error(
+        409,
+        `Opptatt: ${clash.member_name} har reservert ${clash.start_date}–${clash.end_date}`
+      );
+    }
     return json(booking, 201);
   }),
 });
@@ -102,14 +106,15 @@ app.http("bookings-delete", {
   authLevel: "anonymous",
   route: "bookings/{id}",
   handler: withHandler(async (request) => {
-    const member = requireAuth(request);
-    const db = getDb();
-    const booking = db.prepare("SELECT member_id FROM bookings WHERE id = ?").get(request.params.id);
+    const member = await requireAuth(request);
+    const booking = await queryOne("SELECT member_id FROM bookings WHERE id = ?", [
+      request.params.id,
+    ]);
     if (!booking) return error(404, "Reservasjon ikke funnet");
     if (booking.member_id !== member.id && member.role !== "admin") {
       return error(403, "Bare den som reserverte eller en administrator kan slette");
     }
-    db.prepare("DELETE FROM bookings WHERE id = ?").run(request.params.id);
+    await exec("DELETE FROM bookings WHERE id = ?", [request.params.id]);
     return json({ ok: true });
   }),
 });

@@ -42,11 +42,11 @@ Gartha rød · Gartha hvit · Gartha anneks · Skeikampen
 | Frontend  | Ren HTML/CSS/JS PWA i browser — ingen rammeverk, ingen byggsteg |
 | PWA       | `manifest.webmanifest` + service worker (`sw.js`), offline   |
 | API       | Node på **Azure Functions** (v4 programmeringsmodell)        |
-| Lagring   | **SQLite** via `better-sqlite3`                              |
+| Lagring   | **Azure SQL Database** (serverless) via `mssql`             |
 | E-post    | Microsoft Graph `sendMail` (client credentials)              |
 
 Se [`docs/arkitektur.md`](docs/arkitektur.md) for detaljer, datamodell og
-persistens av SQLite på Azure Functions (Azure Files-mount).
+oppsett av Azure SQL.
 
 ## Struktur
 
@@ -73,7 +73,7 @@ api/                       # Azure Functions (Node, v4-modell)
   package.json
   local.settings.json.example
   src/
-    db.js                  # SQLite-lag: skjema, migrering, seeding
+    db.js                  # Azure SQL-lag: pool, async query-hjelpere, skjema, seeding
     auth.js                # OTP + token + requireAuth/requireAdmin
     mail.js                # Microsoft Graph sendMail
     http.js                # Respons-hjelpere + feilhåndtering
@@ -99,11 +99,16 @@ Krever [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-func
 ```bash
 cd api
 npm install
-cp local.settings.json.example local.settings.json   # fyll inn ADMIN_EMAIL m.m.
+cp local.settings.json.example local.settings.json   # fyll inn SQL_* + ADMIN_EMAIL m.m.
 npm start                                             # func start -> http://localhost:7071
 ```
 
-Uten Graph-variabler skrives engangskoden til konsollen i stedet for e-post.
+Lokal utvikling kobler mot en Azure SQL-database (samme som prod, eller en egen
+dev-database). Fyll inn `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER` og `SQL_PASSWORD`
+i `local.settings.json`, og åpne brannmuren i Azure SQL for din IP (Azure-portalen
+→ SQL-server → *Networking*). Skjema og de fire hyttene opprettes automatisk ved
+første oppstart. Uten Graph-variabler skrives engangskoden til konsollen i stedet
+for e-post.
 
 ### Frontend
 Server `frontend/` statisk:
@@ -120,7 +125,12 @@ localhost, og mot `/api` i produksjon.
 
 | Variabel               | Beskrivelse                                            |
 |------------------------|--------------------------------------------------------|
-| `SQLITE_DB_PATH`       | Sti til SQLite-fil (prod: montert Azure Files-share)   |
+| `SQL_SERVER`           | Azure SQL-server, f.eks. `hytteportal.database.windows.net` |
+| `SQL_DATABASE`         | Databasenavn (standard `hytteportal`)                  |
+| `SQL_USER`             | SQL-innlogging (bruker)                                 |
+| `SQL_PASSWORD`         | SQL-passord                                            |
+| `SQL_CONNECTION_STRING`| (valgfritt) hele tilkoblingsstrengen — overstyrer feltene over |
+| `SQL_TRUST_CERT`       | (valgfritt) `true` kun for lokal SQL Server m/selvsignert sert |
 | `ADMIN_EMAIL`          | E-post som seedes som første administrator             |
 | `ADMIN_NAME`           | Visningsnavn for admin                                 |
 | `TENANT_ID`            | M365 tenant (directory) ID for Graph                   |
@@ -144,18 +154,18 @@ To GitHub Actions-workflows i `.github/workflows/`:
 2. Kopier deployment-token (SWA → *Manage deployment token*) og legg det inn som
    repo-secret **`AZURE_STATIC_WEB_APPS_API_TOKEN`**
    (GitHub → Settings → Secrets and variables → Actions).
-3. Sett app-innstillinger i SWA (*Configuration*): `ADMIN_EMAIL`, `TENANT_ID`,
-   `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `MAIL_SENDER`.
+3. Sett app-innstillinger i SWA (*Configuration*): `SQL_SERVER`, `SQL_DATABASE`,
+   `SQL_USER`, `SQL_PASSWORD`, `ADMIN_EMAIL`, `TENANT_ID`, `GRAPH_CLIENT_ID`,
+   `GRAPH_CLIENT_SECRET`, `MAIL_SENDER`.
 4. Deploy skjer automatisk ved push til `main`, eller manuelt via **Run workflow**
    (workflow_dispatch) fra hvilken som helst branch. SWA ruter `/api/*` til Functions
    automatisk, så `API_BASE` blir `/api` uten ekstra konfig.
 
-> ⚠️ **SQLite-persistens på SWA sine managed functions:** disse kjører på flyktig disk,
-> så SQLite-databasen nullstilles ved cold start / ny deploy. Det er greit for å **se
-> resultatet** og teste appen (admin seedes ved oppstart), men for varig lagring bør
-> API-et kjøres som en **frittstående Azure Functions-app** med en montert **Azure
-> Files**-share (`SQLITE_DB_PATH` peker dit) og kobles til SWA som *linked backend*.
-> Se `docs/arkitektur.md`.
+> ℹ️ **Persistens:** Data ligger nå i **Azure SQL Database**, ikke på funksjonens
+> lokale disk. Dermed overlever alt (medlemmer, bookinger, innkjøp, vedlikehold)
+> cold start og ny deploy — også på SWA sine managed functions. Opprett Azure
+> SQL-databasen (serverless anbefales — auto-pauser når appen står stille) før
+> første deploy, og pek `SQL_*`-innstillingene dit. Se `docs/arkitektur.md`.
 
 ## Status
 

@@ -4,9 +4,11 @@
 // - Token: tilfeldig opak streng lagret som hash i 'tokens'-tabellen, 30 dagers
 //   levetid. Klienten lagrer selve tokenet i localStorage og sender det som
 //   'Authorization: Bearer <token>'.
+//
+// Alle funksjoner er async fordi datalaget (Azure SQL) er asynkront.
 
 const { randomUUID, randomBytes, createHash } = require("node:crypto");
-const { getDb } = require("./db");
+const { query, queryOne, exec } = require("./db");
 const { HttpError } = require("./http");
 
 const OTP_TTL_MIN = 10;
@@ -26,45 +28,43 @@ function normalizeEmail(email) {
 }
 
 // Oppretter og lagrer en OTP for e-posten. Returnerer klartekst-koden (til e-post).
-function createOtp(email) {
-  const db = getDb();
+async function createOtp(email) {
   const code = sixDigitCode();
-  db.prepare(
+  await exec(
     `INSERT INTO otp_codes (id, email, code_hash, expires_at)
-     VALUES (?, ?, ?, datetime('now', '+${OTP_TTL_MIN} minutes'))`
-  ).run(randomUUID(), normalizeEmail(email), sha256(code));
+     VALUES (?, ?, ?, DATEADD(minute, ${OTP_TTL_MIN}, SYSUTCDATETIME()))`,
+    [randomUUID(), normalizeEmail(email), sha256(code)]
+  );
   return code;
 }
 
 // Verifiserer OTP. Ved suksess ryddes alle koder for e-posten. Kaster ved feil.
-function verifyOtp(email, code) {
-  const db = getDb();
+async function verifyOtp(email, code) {
   const e = normalizeEmail(email);
-  const row = db
-    .prepare(
-      `SELECT id FROM otp_codes
-       WHERE email = ? AND code_hash = ? AND expires_at > datetime('now')
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(e, sha256(String(code || "").trim()));
+  const row = await queryOne(
+    `SELECT TOP 1 id FROM otp_codes
+     WHERE email = ? AND code_hash = ? AND expires_at > SYSUTCDATETIME()
+     ORDER BY created_at DESC`,
+    [e, sha256(String(code || "").trim())]
+  );
   if (!row) throw new HttpError(401, "Ugyldig eller utløpt kode");
-  db.prepare("DELETE FROM otp_codes WHERE email = ?").run(e);
+  await exec("DELETE FROM otp_codes WHERE email = ?", [e]);
 }
 
 // Utsteder et token for et medlem og returnerer klartekst-tokenet.
-function issueToken(memberId) {
-  const db = getDb();
+async function issueToken(memberId) {
   const token = randomBytes(32).toString("base64url");
-  db.prepare(
+  await exec(
     `INSERT INTO tokens (token_hash, member_id, expires_at)
-     VALUES (?, ?, datetime('now', '+${TOKEN_TTL_DAYS} days'))`
-  ).run(sha256(token), memberId);
+     VALUES (?, ?, DATEADD(day, ${TOKEN_TTL_DAYS}, SYSUTCDATETIME()))`,
+    [sha256(token), memberId]
+  );
   return token;
 }
 
-function revokeToken(token) {
+async function revokeToken(token) {
   if (!token) return;
-  getDb().prepare("DELETE FROM tokens WHERE token_hash = ?").run(sha256(token));
+  await exec("DELETE FROM tokens WHERE token_hash = ?", [sha256(token)]);
 }
 
 function bearerToken(request) {
@@ -74,23 +74,21 @@ function bearerToken(request) {
 }
 
 // Returnerer innlogget medlem eller kaster 401.
-function requireAuth(request) {
+async function requireAuth(request) {
   const token = bearerToken(request);
   if (!token) throw new HttpError(401, "Mangler token");
-  const db = getDb();
-  const member = db
-    .prepare(
-      `SELECT m.id, m.email, m.name, m.role
-       FROM tokens t JOIN members m ON m.id = t.member_id
-       WHERE t.token_hash = ? AND t.expires_at > datetime('now')`
-    )
-    .get(sha256(token));
+  const member = await queryOne(
+    `SELECT m.id, m.email, m.name, m.role
+     FROM tokens t JOIN members m ON m.id = t.member_id
+     WHERE t.token_hash = ? AND t.expires_at > SYSUTCDATETIME()`,
+    [sha256(token)]
+  );
   if (!member) throw new HttpError(401, "Ugyldig eller utløpt token");
   return member;
 }
 
-function requireAdmin(request) {
-  const member = requireAuth(request);
+async function requireAdmin(request) {
+  const member = await requireAuth(request);
   if (member.role !== "admin") throw new HttpError(403, "Krever administrator");
   return member;
 }

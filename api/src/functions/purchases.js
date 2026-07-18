@@ -1,6 +1,6 @@
 const { app } = require("@azure/functions");
 const { randomUUID } = require("node:crypto");
-const { getDb } = require("../db");
+const { query, queryOne, exec } = require("../db");
 const { json, error, withHandler } = require("../http");
 const { requireAuth } = require("../auth");
 
@@ -16,15 +16,14 @@ app.http("purchases-list", {
   authLevel: "anonymous",
   route: "cabins/{cabinId}/purchases",
   handler: withHandler(async (request) => {
-    requireAuth(request);
-    const rows = getDb()
-      .prepare(
-        `SELECT id, cabin_id, title, comment, price, bought, bought_by_name, bought_at,
-                created_by, created_by_name, source, created_at
-         FROM purchases WHERE cabin_id = ?
-         ORDER BY bought, created_at DESC`
-      )
-      .all(request.params.cabinId);
+    await requireAuth(request);
+    const rows = await query(
+      `SELECT id, cabin_id, title, comment, price, bought, bought_by_name, bought_at,
+              created_by, created_by_name, source, created_at
+       FROM purchases WHERE cabin_id = ?
+       ORDER BY bought, created_at DESC`,
+      [request.params.cabinId]
+    );
     return json(rows);
   }),
 });
@@ -35,14 +34,13 @@ app.http("purchases-create", {
   authLevel: "anonymous",
   route: "cabins/{cabinId}/purchases",
   handler: withHandler(async (request) => {
-    const member = requireAuth(request);
+    const member = await requireAuth(request);
     const cabinId = request.params.cabinId;
     const body = (await request.json().catch(() => ({}))) || {};
     const title = String(body.title || "").trim();
     if (!title) return error(400, "Feltet 'title' er påkrevd");
 
-    const db = getDb();
-    if (!db.prepare("SELECT id FROM cabins WHERE id = ?").get(cabinId)) {
+    if (!(await queryOne("SELECT id FROM cabins WHERE id = ?", [cabinId]))) {
       return error(404, "Hytte ikke funnet");
     }
     const item = {
@@ -54,11 +52,12 @@ app.http("purchases-create", {
       created_by: member.id,
       created_by_name: member.name,
     };
-    db.prepare(
+    await exec(
       `INSERT INTO purchases (id, cabin_id, title, comment, price, created_by, created_by_name, source)
-       VALUES (@id, @cabin_id, @title, @comment, @price, @created_by, @created_by_name, 'manual')`
-    ).run(item);
-    return json(db.prepare("SELECT * FROM purchases WHERE id = ?").get(item.id), 201);
+       VALUES (@id, @cabin_id, @title, @comment, @price, @created_by, @created_by_name, 'manual')`,
+      item
+    );
+    return json(await queryOne("SELECT * FROM purchases WHERE id = ?", [item.id]), 201);
   }),
 });
 
@@ -70,11 +69,10 @@ app.http("purchases-update", {
   authLevel: "anonymous",
   route: "purchases/{id}",
   handler: withHandler(async (request) => {
-    const member = requireAuth(request);
+    const member = await requireAuth(request);
     const id = request.params.id;
     const body = (await request.json().catch(() => ({}))) || {};
-    const db = getDb();
-    const item = db.prepare("SELECT * FROM purchases WHERE id = ?").get(id);
+    const item = await queryOne("SELECT * FROM purchases WHERE id = ?", [id]);
     if (!item) return error(404, "Vare ikke funnet");
 
     const isOwner = item.created_by === member.id || member.role === "admin";
@@ -86,26 +84,25 @@ app.http("purchases-update", {
 
     if (body.title !== undefined) {
       const t = String(body.title).trim();
-      if (t) db.prepare("UPDATE purchases SET title = ? WHERE id = ?").run(t, id);
+      if (t) await exec("UPDATE purchases SET title = ? WHERE id = ?", [t, id]);
     }
     if (body.comment !== undefined) {
-      db.prepare("UPDATE purchases SET comment = ? WHERE id = ?").run(
+      await exec("UPDATE purchases SET comment = ? WHERE id = ?", [
         body.comment ? String(body.comment).trim() : null,
-        id
-      );
+        id,
+      ]);
     }
     if (body.price !== undefined) {
-      db.prepare("UPDATE purchases SET price = ? WHERE id = ?").run(parsePrice(body.price), id);
+      await exec("UPDATE purchases SET price = ? WHERE id = ?", [parsePrice(body.price), id]);
     }
     if (body.bought !== undefined) {
       const bought = body.bought ? 1 : 0;
-      db.prepare(
-        `UPDATE purchases
-         SET bought = ?, bought_by_name = ?, bought_at = ?
-         WHERE id = ?`
-      ).run(bought, bought ? member.name : null, bought ? new Date().toISOString() : null, id);
+      await exec(
+        `UPDATE purchases SET bought = ?, bought_by_name = ?, bought_at = ? WHERE id = ?`,
+        [bought, bought ? member.name : null, bought ? new Date() : null, id]
+      );
     }
-    return json(db.prepare("SELECT * FROM purchases WHERE id = ?").get(id));
+    return json(await queryOne("SELECT * FROM purchases WHERE id = ?", [id]));
   }),
 });
 
@@ -115,14 +112,15 @@ app.http("purchases-delete", {
   authLevel: "anonymous",
   route: "purchases/{id}",
   handler: withHandler(async (request) => {
-    const member = requireAuth(request);
-    const db = getDb();
-    const item = db.prepare("SELECT created_by FROM purchases WHERE id = ?").get(request.params.id);
+    const member = await requireAuth(request);
+    const item = await queryOne("SELECT created_by FROM purchases WHERE id = ?", [
+      request.params.id,
+    ]);
     if (!item) return error(404, "Vare ikke funnet");
     if (item.created_by !== member.id && member.role !== "admin") {
       return error(403, "Bare den som la inn varen eller en administrator kan slette");
     }
-    db.prepare("DELETE FROM purchases WHERE id = ?").run(request.params.id);
+    await exec("DELETE FROM purchases WHERE id = ?", [request.params.id]);
     return json({ ok: true });
   }),
 });

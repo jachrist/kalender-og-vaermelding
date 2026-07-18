@@ -1,15 +1,18 @@
-// SQLite-lag for Hytteportal.
+// Datalag for Hytteportal — Azure SQL (serverless) via mssql.
 //
-// Bruker better-sqlite3 (synkront, raskt, enkelt). Databasefilen ligger på stien
-// i miljøvariabelen SQLITE_DB_PATH. På Azure Functions er lokal disk flyktig, så
-// i produksjon bør stien peke til en montert Azure Files-share (f.eks.
-// /mounted-data/hytteportal.db) slik at dataene overlever restart/skalering.
-// Se docs/arkitektur.md.
+// mssql er en ren JS-driver (Tedious), så ingen native modul å kompilere.
+// Tilkobling styres av miljøvariabler (se local.settings.json.example):
+//   - SQL_CONNECTION_STRING  (valgfritt — hele tilkoblingsstrengen)
+//   eller de diskrete:
+//   - SQL_SERVER    (f.eks. hytteportal.database.windows.net)
+//   - SQL_DATABASE  (f.eks. hytteportal)
+//   - SQL_USER, SQL_PASSWORD
+//
+// Skjema opprettes/migreres idempotent ved første tilkobling, og de fire
+// hyttene + admin (fra ADMIN_EMAIL) seedes. Se docs/arkitektur.md.
 
-const path = require("node:path");
-const fs = require("node:fs");
+const sql = require("mssql");
 const { randomUUID } = require("node:crypto");
-const Database = require("better-sqlite3");
 
 // De fire hyttene familien eier. Seedes ved første oppstart.
 const CABINS = [
@@ -19,139 +22,256 @@ const CABINS = [
   { name: "Skeikampen", sort_order: 4 },
 ];
 
-let db;
+let poolPromise = null;
 
-function getDb() {
-  if (db) return db;
-
-  const dbPath = process.env.SQLITE_DB_PATH || path.join(__dirname, "..", "data", "hytteportal.db");
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-
-  db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  migrate(db);
-  seed(db);
-  return db;
+function buildConfig() {
+  if (process.env.SQL_CONNECTION_STRING) {
+    return process.env.SQL_CONNECTION_STRING;
+  }
+  const server = process.env.SQL_SERVER;
+  if (!server) {
+    throw new Error(
+      "Mangler databasekonfig: sett SQL_CONNECTION_STRING eller SQL_SERVER/SQL_DATABASE/SQL_USER/SQL_PASSWORD."
+    );
+  }
+  return {
+    server,
+    database: process.env.SQL_DATABASE || "hytteportal",
+    user: process.env.SQL_USER,
+    password: process.env.SQL_PASSWORD,
+    options: {
+      encrypt: true,
+      // Azure SQL bruker gyldig sertifikat; sett SQL_TRUST_CERT=true kun for
+      // lokal SQL Server med selvsignert sertifikat.
+      trustServerCertificate: process.env.SQL_TRUST_CERT === "true",
+    },
+    pool: { max: 5, min: 0, idleTimeoutMillis: 30000 },
+    // Serverless Azure SQL kan «auto-pause» — gi den tid til å våkne.
+    connectionTimeout: 60000,
+    requestTimeout: 60000,
+  };
 }
 
-function migrate(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS members (
-      id         TEXT PRIMARY KEY,
-      email      TEXT NOT NULL UNIQUE,
-      name       TEXT NOT NULL,
-      role       TEXT NOT NULL DEFAULT 'member',   -- 'admin' | 'member'
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+// Lazy singleton: første kall oppretter poolen og kjører migrering + seeding.
+// Ved feil nullstilles løftet slik at neste kall prøver på nytt.
+async function getPool() {
+  if (!poolPromise) {
+    poolPromise = (async () => {
+      const pool = new sql.ConnectionPool(buildConfig());
+      await pool.connect();
+      await migrate(pool);
+      await seed(pool);
+      return pool;
+    })().catch((err) => {
+      poolPromise = null;
+      throw err;
+    });
+  }
+  return poolPromise;
+}
+
+// Binder parametere på en request. Aksepterer enten en array (posisjonelle
+// '?'-plassholdere oversettes til @p0, @p1 …) eller et objekt (navngitte
+// @-parametere brukes direkte). Returnerer den ferdige SQL-teksten.
+function bind(request, text, params) {
+  if (Array.isArray(params)) {
+    let i = 0;
+    return text.replace(/\?/g, () => {
+      const name = `p${i}`;
+      request.input(name, params[i]);
+      i += 1;
+      return `@${name}`;
+    });
+  }
+  if (params && typeof params === "object") {
+    for (const [key, value] of Object.entries(params)) request.input(key, value);
+  }
+  return text;
+}
+
+// SELECT som returnerer alle rader.
+async function query(text, params) {
+  const pool = await getPool();
+  const request = pool.request();
+  const result = await request.query(bind(request, text, params));
+  return result.recordset || [];
+}
+
+// SELECT som returnerer første rad (eller undefined).
+async function queryOne(text, params) {
+  return (await query(text, params))[0];
+}
+
+// INSERT/UPDATE/DELETE. Returnerer antall berørte rader.
+async function exec(text, params) {
+  const pool = await getPool();
+  const request = pool.request();
+  const result = await request.query(bind(request, text, params));
+  return result.rowsAffected[0] || 0;
+}
+
+// Kjører fn innenfor en serialiserbar transaksjon. fn får en query-funksjon
+// med samme signatur som query() ovenfor, men bundet til transaksjonen.
+// Brukes der lese-så-skrive må være atomisk (FCFS-booking, faste utgifter).
+async function withTx(fn) {
+  const pool = await getPool();
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const txQuery = async (text, params) => {
+      const request = new sql.Request(tx);
+      const result = await request.query(bind(request, text, params));
+      return result.recordset || [];
+    };
+    const result = await fn(txQuery);
+    await tx.commit();
+    return result;
+  } catch (err) {
+    try {
+      await tx.rollback();
+    } catch {
+      /* rollback kan feile hvis transaksjonen allerede er avbrutt */
+    }
+    throw err;
+  }
+}
+
+async function migrate(pool) {
+  await pool.request().batch(`
+    IF OBJECT_ID(N'dbo.members', N'U') IS NULL
+    CREATE TABLE members (
+      id         NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      email      NVARCHAR(320) NOT NULL UNIQUE,
+      name       NVARCHAR(200) NOT NULL,
+      role       NVARCHAR(20)  NOT NULL CONSTRAINT DF_members_role DEFAULT 'member',  -- 'admin' | 'member'
+      created_at DATETIME2     NOT NULL CONSTRAINT DF_members_created DEFAULT SYSUTCDATETIME()
     );
 
-    CREATE TABLE IF NOT EXISTS otp_codes (
-      id         TEXT PRIMARY KEY,
-      email      TEXT NOT NULL,
-      code_hash  TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    IF OBJECT_ID(N'dbo.otp_codes', N'U') IS NULL
+    CREATE TABLE otp_codes (
+      id         NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      email      NVARCHAR(320) NOT NULL,
+      code_hash  NVARCHAR(64)  NOT NULL,
+      expires_at DATETIME2     NOT NULL,
+      created_at DATETIME2     NOT NULL CONSTRAINT DF_otp_created DEFAULT SYSUTCDATETIME()
     );
-    CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email);
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_otp_email' AND object_id = OBJECT_ID(N'dbo.otp_codes'))
+    CREATE INDEX idx_otp_email ON otp_codes(email);
 
-    CREATE TABLE IF NOT EXISTS tokens (
-      token_hash TEXT PRIMARY KEY,
-      member_id  TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-      expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    IF OBJECT_ID(N'dbo.tokens', N'U') IS NULL
+    CREATE TABLE tokens (
+      token_hash NVARCHAR(64) NOT NULL PRIMARY KEY,
+      member_id  NVARCHAR(36) NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      expires_at DATETIME2    NOT NULL,
+      created_at DATETIME2    NOT NULL CONSTRAINT DF_tokens_created DEFAULT SYSUTCDATETIME()
     );
-    CREATE INDEX IF NOT EXISTS idx_tokens_member ON tokens(member_id);
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_tokens_member' AND object_id = OBJECT_ID(N'dbo.tokens'))
+    CREATE INDEX idx_tokens_member ON tokens(member_id);
 
-    CREATE TABLE IF NOT EXISTS cabins (
-      id         TEXT PRIMARY KEY,
-      name       TEXT NOT NULL UNIQUE,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    IF OBJECT_ID(N'dbo.cabins', N'U') IS NULL
+    CREATE TABLE cabins (
+      id         NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      name       NVARCHAR(200) NOT NULL UNIQUE,
+      sort_order INT           NOT NULL CONSTRAINT DF_cabins_sort DEFAULT 0,
+      created_at DATETIME2     NOT NULL CONSTRAINT DF_cabins_created DEFAULT SYSUTCDATETIME()
     );
 
-    -- Reservasjoner på døgnbasis. Inklusiv datointervall (start_date .. end_date).
-    -- First-come-first-serve håndheves ved overlappsjekk i route-laget.
-    CREATE TABLE IF NOT EXISTS bookings (
-      id          TEXT PRIMARY KEY,
-      cabin_id    TEXT NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
-      member_id   TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-      member_name TEXT NOT NULL,
-      start_date  TEXT NOT NULL,   -- 'YYYY-MM-DD'
-      end_date    TEXT NOT NULL,   -- 'YYYY-MM-DD' (inklusiv)
-      note        TEXT,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    -- Reservasjoner på døgnbasis. Inklusiv datointervall (start_date .. end_date,
+    -- lagret som 'YYYY-MM-DD'-strenger). FCFS håndheves ved overlappsjekk i route-laget.
+    IF OBJECT_ID(N'dbo.bookings', N'U') IS NULL
+    CREATE TABLE bookings (
+      id          NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      cabin_id    NVARCHAR(36)  NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
+      member_id   NVARCHAR(36)  NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      member_name NVARCHAR(200) NOT NULL,
+      start_date  NVARCHAR(10)  NOT NULL,
+      end_date    NVARCHAR(10)  NOT NULL,
+      note        NVARCHAR(1000) NULL,
+      created_at  DATETIME2     NOT NULL CONSTRAINT DF_bookings_created DEFAULT SYSUTCDATETIME()
     );
-    CREATE INDEX IF NOT EXISTS idx_bookings_cabin ON bookings(cabin_id, start_date, end_date);
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_bookings_cabin' AND object_id = OBJECT_ID(N'dbo.bookings'))
+    CREATE INDEX idx_bookings_cabin ON bookings(cabin_id, start_date, end_date);
 
     -- Handleliste. Eier kan redigere/slette; alle kan huke av 'bought'.
-    CREATE TABLE IF NOT EXISTS purchases (
-      id              TEXT PRIMARY KEY,
-      cabin_id        TEXT NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
-      title           TEXT NOT NULL,
-      comment         TEXT,
-      price           REAL,
-      bought          INTEGER NOT NULL DEFAULT 0,
-      bought_by_name  TEXT,
-      bought_at       TEXT,
-      created_by      TEXT REFERENCES members(id) ON DELETE SET NULL,
-      created_by_name TEXT NOT NULL,
-      source          TEXT NOT NULL DEFAULT 'manual',  -- 'manual' | 'recurring'
-      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    IF OBJECT_ID(N'dbo.purchases', N'U') IS NULL
+    CREATE TABLE purchases (
+      id              NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      cabin_id        NVARCHAR(36)  NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
+      title           NVARCHAR(300) NOT NULL,
+      comment         NVARCHAR(1000) NULL,
+      price           FLOAT         NULL,
+      bought          BIT           NOT NULL CONSTRAINT DF_purchases_bought DEFAULT 0,
+      bought_by_name  NVARCHAR(200) NULL,
+      bought_at       DATETIME2     NULL,
+      created_by      NVARCHAR(36)  NULL REFERENCES members(id) ON DELETE SET NULL,
+      created_by_name NVARCHAR(200) NOT NULL,
+      source          NVARCHAR(20)  NOT NULL CONSTRAINT DF_purchases_source DEFAULT 'manual',  -- 'manual' | 'recurring'
+      created_at      DATETIME2     NOT NULL CONSTRAINT DF_purchases_created DEFAULT SYSUTCDATETIME()
     );
-    CREATE INDEX IF NOT EXISTS idx_purchases_cabin ON purchases(cabin_id);
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_purchases_cabin' AND object_id = OBJECT_ID(N'dbo.purchases'))
+    CREATE INDEX idx_purchases_cabin ON purchases(cabin_id);
 
     -- Faste utgifter som automatisk materialiseres til handlelista hver måned.
-    CREATE TABLE IF NOT EXISTS recurring_expenses (
-      id               TEXT PRIMARY KEY,
-      cabin_id         TEXT NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
-      title            TEXT NOT NULL,
-      comment          TEXT,
-      price            REAL,
-      day_of_month     INTEGER NOT NULL DEFAULT 1,     -- 1..28
-      active           INTEGER NOT NULL DEFAULT 1,
-      last_generated   TEXT,                            -- 'YYYY-MM' sist generert
-      created_by       TEXT REFERENCES members(id) ON DELETE SET NULL,
-      created_by_name  TEXT NOT NULL,
-      created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    IF OBJECT_ID(N'dbo.recurring_expenses', N'U') IS NULL
+    CREATE TABLE recurring_expenses (
+      id               NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      cabin_id         NVARCHAR(36)  NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
+      title            NVARCHAR(300) NOT NULL,
+      comment          NVARCHAR(1000) NULL,
+      price            FLOAT         NULL,
+      day_of_month     INT           NOT NULL CONSTRAINT DF_recurring_day DEFAULT 1,   -- 1..28
+      active           BIT           NOT NULL CONSTRAINT DF_recurring_active DEFAULT 1,
+      last_generated   NVARCHAR(7)   NULL,                                             -- 'YYYY-MM'
+      created_by       NVARCHAR(36)  NULL REFERENCES members(id) ON DELETE SET NULL,
+      created_by_name  NVARCHAR(200) NOT NULL,
+      created_at       DATETIME2     NOT NULL CONSTRAINT DF_recurring_created DEFAULT SYSUTCDATETIME()
     );
-    CREATE INDEX IF NOT EXISTS idx_recurring_cabin ON recurring_expenses(cabin_id);
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_recurring_cabin' AND object_id = OBJECT_ID(N'dbo.recurring_expenses'))
+    CREATE INDEX idx_recurring_cabin ON recurring_expenses(cabin_id);
 
     -- Vedlikehold. Alle medlemmer kan redigere.
-    CREATE TABLE IF NOT EXISTS maintenance (
-      id               TEXT PRIMARY KEY,
-      cabin_id         TEXT NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
-      title            TEXT NOT NULL,
-      description      TEXT,
-      status           TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'in_progress' | 'done'
-      due_date         TEXT,                            -- 'YYYY-MM-DD'
-      created_by       TEXT REFERENCES members(id) ON DELETE SET NULL,
-      created_by_name  TEXT NOT NULL,
-      updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    IF OBJECT_ID(N'dbo.maintenance', N'U') IS NULL
+    CREATE TABLE maintenance (
+      id               NVARCHAR(36)  NOT NULL PRIMARY KEY,
+      cabin_id         NVARCHAR(36)  NOT NULL REFERENCES cabins(id) ON DELETE CASCADE,
+      title            NVARCHAR(300) NOT NULL,
+      description      NVARCHAR(2000) NULL,
+      status           NVARCHAR(20)  NOT NULL CONSTRAINT DF_maintenance_status DEFAULT 'open',  -- 'open' | 'in_progress' | 'done'
+      due_date         NVARCHAR(10)  NULL,
+      created_by       NVARCHAR(36)  NULL REFERENCES members(id) ON DELETE SET NULL,
+      created_by_name  NVARCHAR(200) NOT NULL,
+      updated_at       DATETIME2     NOT NULL CONSTRAINT DF_maintenance_updated DEFAULT SYSUTCDATETIME(),
+      created_at       DATETIME2     NOT NULL CONSTRAINT DF_maintenance_created DEFAULT SYSUTCDATETIME()
     );
-    CREATE INDEX IF NOT EXISTS idx_maintenance_cabin ON maintenance(cabin_id);
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_maintenance_cabin' AND object_id = OBJECT_ID(N'dbo.maintenance'))
+    CREATE INDEX idx_maintenance_cabin ON maintenance(cabin_id);
   `);
 }
 
-function seed(db) {
-  // Hytter
-  const insertCabin = db.prepare(
-    "INSERT OR IGNORE INTO cabins (id, name, sort_order) VALUES (?, ?, ?)"
-  );
-  const seedCabins = db.transaction(() => {
-    for (const c of CABINS) insertCabin.run(randomUUID(), c.name, c.sort_order);
-  });
-  seedCabins();
+async function seed(pool) {
+  // Hytter — idempotent på unikt navn.
+  for (const c of CABINS) {
+    const request = pool.request();
+    request.input("id", randomUUID());
+    request.input("name", c.name);
+    request.input("sort_order", c.sort_order);
+    await request.query(
+      `IF NOT EXISTS (SELECT 1 FROM cabins WHERE name = @name)
+         INSERT INTO cabins (id, name, sort_order) VALUES (@id, @name, @sort_order)`
+    );
+  }
 
   // Admin — fra env, med trygg fallback til eierens e-post.
   const adminEmail = (process.env.ADMIN_EMAIL || "jachrist2709@gmail.com").trim().toLowerCase();
   const adminName = (process.env.ADMIN_NAME || "Administrator").trim();
-  const existing = db.prepare("SELECT id FROM members WHERE email = ?").get(adminEmail);
-  if (!existing) {
-    db.prepare(
-      "INSERT INTO members (id, email, name, role) VALUES (?, ?, ?, 'admin')"
-    ).run(randomUUID(), adminEmail, adminName);
-  }
+  const request = pool.request();
+  request.input("id", randomUUID());
+  request.input("email", adminEmail);
+  request.input("name", adminName);
+  await request.query(
+    `IF NOT EXISTS (SELECT 1 FROM members WHERE email = @email)
+       INSERT INTO members (id, email, name, role) VALUES (@id, @email, @name, 'admin')`
+  );
 }
 
-module.exports = { getDb };
+module.exports = { getPool, query, queryOne, exec, withTx };

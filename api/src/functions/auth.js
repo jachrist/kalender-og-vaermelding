@@ -1,5 +1,5 @@
 const { app } = require("@azure/functions");
-const { getDb } = require("../db");
+const { queryOne } = require("../db");
 const { json, error, withHandler } = require("../http");
 const {
   createOtp,
@@ -22,13 +22,13 @@ app.http("auth-request-code", {
     const e = normalizeEmail(email);
     if (!e) return error(400, "Feltet 'email' er påkrevd");
 
-    const member = getDb().prepare("SELECT id FROM members WHERE email = ?").get(e);
+    const member = await queryOne("SELECT id FROM members WHERE email = ?", [e]);
     if (!member) {
       // Lukket familiegruppe — vær tydelig på at e-posten ikke er registrert.
       return error(404, "E-posten er ikke registrert. Kontakt en administrator.");
     }
 
-    const code = createOtp(e);
+    const code = await createOtp(e);
     await sendOtpEmail(e, code, context);
     return json({ ok: true, message: "Engangskode sendt" });
   }),
@@ -44,13 +44,14 @@ app.http("auth-verify", {
     const e = normalizeEmail(email);
     if (!e || !code) return error(400, "Feltene 'email' og 'code' er påkrevd");
 
-    const member = getDb()
-      .prepare("SELECT id, email, name, role FROM members WHERE email = ?")
-      .get(e);
+    const member = await queryOne(
+      "SELECT id, email, name, role FROM members WHERE email = ?",
+      [e]
+    );
     if (!member) return error(404, "E-posten er ikke registrert");
 
-    verifyOtp(e, code); // kaster 401 ved feil
-    const token = issueToken(member.id);
+    await verifyOtp(e, code); // kaster 401 ved feil
+    const token = await issueToken(member.id);
     return json({ token, member });
   }),
 });
@@ -61,7 +62,7 @@ app.http("auth-me", {
   authLevel: "anonymous",
   route: "auth/me",
   handler: withHandler(async (request) => {
-    const member = requireAuth(request);
+    const member = await requireAuth(request);
     return json({ member });
   }),
 });
@@ -74,7 +75,7 @@ app.http("auth-logout", {
   handler: withHandler(async (request) => {
     const header = request.headers.get("authorization") || "";
     const token = header.replace(/^Bearer\s+/i, "").trim();
-    revokeToken(token);
+    await revokeToken(token);
     return json({ ok: true });
   }),
 });

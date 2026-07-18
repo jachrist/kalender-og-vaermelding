@@ -1,6 +1,6 @@
 const { app } = require("@azure/functions");
 const { randomUUID } = require("node:crypto");
-const { getDb } = require("../db");
+const { query, queryOne, exec } = require("../db");
 const { json, error, withHandler } = require("../http");
 const { requireAuth } = require("../auth");
 
@@ -13,15 +13,15 @@ app.http("maintenance-list", {
   authLevel: "anonymous",
   route: "cabins/{cabinId}/maintenance",
   handler: withHandler(async (request) => {
-    requireAuth(request);
-    const rows = getDb()
-      .prepare(
-        `SELECT id, cabin_id, title, description, status, due_date,
-                created_by, created_by_name, updated_at, created_at
-         FROM maintenance WHERE cabin_id = ?
-         ORDER BY CASE status WHEN 'done' THEN 1 ELSE 0 END, due_date IS NULL, due_date, created_at DESC`
-      )
-      .all(request.params.cabinId);
+    await requireAuth(request);
+    const rows = await query(
+      `SELECT id, cabin_id, title, description, status, due_date,
+              created_by, created_by_name, updated_at, created_at
+       FROM maintenance WHERE cabin_id = ?
+       ORDER BY CASE status WHEN 'done' THEN 1 ELSE 0 END,
+                CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date, created_at DESC`,
+      [request.params.cabinId]
+    );
     return json(rows);
   }),
 });
@@ -32,14 +32,13 @@ app.http("maintenance-create", {
   authLevel: "anonymous",
   route: "cabins/{cabinId}/maintenance",
   handler: withHandler(async (request) => {
-    const member = requireAuth(request);
+    const member = await requireAuth(request);
     const cabinId = request.params.cabinId;
     const body = (await request.json().catch(() => ({}))) || {};
     const title = String(body.title || "").trim();
     if (!title) return error(400, "Feltet 'title' er påkrevd");
 
-    const db = getDb();
-    if (!db.prepare("SELECT id FROM cabins WHERE id = ?").get(cabinId)) {
+    if (!(await queryOne("SELECT id FROM cabins WHERE id = ?", [cabinId]))) {
       return error(404, "Hytte ikke funnet");
     }
     const status = STATUSES.includes(body.status) ? body.status : "open";
@@ -55,11 +54,12 @@ app.http("maintenance-create", {
       created_by: member.id,
       created_by_name: member.name,
     };
-    db.prepare(
+    await exec(
       `INSERT INTO maintenance (id, cabin_id, title, description, status, due_date, created_by, created_by_name)
-       VALUES (@id, @cabin_id, @title, @description, @status, @due_date, @created_by, @created_by_name)`
-    ).run(item);
-    return json(db.prepare("SELECT * FROM maintenance WHERE id = ?").get(item.id), 201);
+       VALUES (@id, @cabin_id, @title, @description, @status, @due_date, @created_by, @created_by_name)`,
+      item
+    );
+    return json(await queryOne("SELECT * FROM maintenance WHERE id = ?", [item.id]), 201);
   }),
 });
 
@@ -69,35 +69,34 @@ app.http("maintenance-update", {
   authLevel: "anonymous",
   route: "maintenance/{id}",
   handler: withHandler(async (request) => {
-    requireAuth(request);
+    await requireAuth(request);
     const id = request.params.id;
     const body = (await request.json().catch(() => ({}))) || {};
-    const db = getDb();
-    if (!db.prepare("SELECT id FROM maintenance WHERE id = ?").get(id)) {
+    if (!(await queryOne("SELECT id FROM maintenance WHERE id = ?", [id]))) {
       return error(404, "Oppgave ikke funnet");
     }
 
     if (body.title !== undefined) {
       const t = String(body.title).trim();
-      if (t) db.prepare("UPDATE maintenance SET title = ? WHERE id = ?").run(t, id);
+      if (t) await exec("UPDATE maintenance SET title = ? WHERE id = ?", [t, id]);
     }
     if (body.description !== undefined) {
-      db.prepare("UPDATE maintenance SET description = ? WHERE id = ?").run(
+      await exec("UPDATE maintenance SET description = ? WHERE id = ?", [
         body.description ? String(body.description).trim() : null,
-        id
-      );
+        id,
+      ]);
     }
     if (body.status !== undefined && STATUSES.includes(body.status)) {
-      db.prepare("UPDATE maintenance SET status = ? WHERE id = ?").run(body.status, id);
+      await exec("UPDATE maintenance SET status = ? WHERE id = ?", [body.status, id]);
     }
     if (body.due_date !== undefined) {
-      db.prepare("UPDATE maintenance SET due_date = ? WHERE id = ?").run(
+      await exec("UPDATE maintenance SET due_date = ? WHERE id = ?", [
         DATE_RE.test(body.due_date || "") ? body.due_date : null,
-        id
-      );
+        id,
+      ]);
     }
-    db.prepare("UPDATE maintenance SET updated_at = datetime('now') WHERE id = ?").run(id);
-    return json(db.prepare("SELECT * FROM maintenance WHERE id = ?").get(id));
+    await exec("UPDATE maintenance SET updated_at = SYSUTCDATETIME() WHERE id = ?", [id]);
+    return json(await queryOne("SELECT * FROM maintenance WHERE id = ?", [id]));
   }),
 });
 
@@ -107,9 +106,9 @@ app.http("maintenance-delete", {
   authLevel: "anonymous",
   route: "maintenance/{id}",
   handler: withHandler(async (request) => {
-    requireAuth(request);
-    const info = getDb().prepare("DELETE FROM maintenance WHERE id = ?").run(request.params.id);
-    if (info.changes === 0) return error(404, "Oppgave ikke funnet");
+    await requireAuth(request);
+    const changes = await exec("DELETE FROM maintenance WHERE id = ?", [request.params.id]);
+    if (changes === 0) return error(404, "Oppgave ikke funnet");
     return json({ ok: true });
   }),
 });

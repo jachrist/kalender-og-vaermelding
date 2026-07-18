@@ -6,45 +6,53 @@
 ┌────────────────────┐        HTTPS         ┌──────────────────────┐
 │  PWA (frontend/)    │  ───────────────►    │  Azure Functions     │
 │  HTML/CSS/JS        │   /api/*             │  Node (v4-modell)     │
-│  Service worker     │  ◄───────────────    │  better-sqlite3       │
+│  Service worker     │  ◄───────────────    │  mssql-driver         │
 └────────────────────┘                       └──────────┬───────────┘
-                                                         │
-                                                 ┌───────▼────────┐
-                                                 │  SQLite-fil     │
-                                                 │  (Azure Files)  │
-                                                 └────────────────┘
+                                                         │ TDS (kryptert)
+                                                 ┌───────▼────────────┐
+                                                 │  Azure SQL Database │
+                                                 │  (serverless)       │
+                                                 └─────────────────────┘
 ```
 
 - **Frontend** er en ren statisk PWA uten byggsteg. Kan hostes på Azure Static Web
   Apps, en enkel nginx, eller hva som helst som serverer statiske filer.
 - **API** er Node på Azure Functions med v4-programmeringsmodellen (`app.http(...)`),
   én fil per funksjonsområde under `api/src/functions/`.
-- **Lagring** er SQLite via `better-sqlite3` — synkront, raskt og enkelt for et
-  familie-datasett av denne størrelsen.
+- **Lagring** er **Azure SQL Database** via `mssql` (Tedious) — en ren JS-driver
+  uten native modul. Datalaget er isolert i `api/src/db.js` bak et lite sett
+  async-hjelpere (`query`, `queryOne`, `exec`, `withTx`).
 
-## SQLite på Azure Functions — persistens
+## Azure SQL — oppsett og persistens
 
-Azure Functions kjører på flyktig lokal disk: filer skrevet til funksjonens
-lokale filsystem kan forsvinne ved restart, deploy eller utskalering. En SQLite-fil
-på lokal disk vil derfor **ikke** være trygg.
+Data ligger i en managed Azure SQL Database, ikke på funksjonens lokale disk.
+Dermed overlever alt cold start, deploy og utskalering — også på Static Web Apps
+sine managed functions.
 
-Løsning: monter en **Azure Files**-share på funksjons-appen og legg databasefilen der.
+Anbefalt: **serverless**-nivå. Den auto-pauser når appen står stille (familie-app
+som er tom mesteparten av døgnet) og starter igjen ved neste kall. `db.js` bruker
+romslige connection/request-timeouts (60 s) nettopp fordi første kall etter en
+pause kan bruke noen sekunder på å vekke databasen.
 
-- Sett `SQLITE_DB_PATH` til en sti på den monterte share-en, f.eks.
-  `/mounted-data/hytteportal.db`.
-- Konfigurer mount via `az webapp config storage-account add` (Linux
-  Consumption/Premium) eller path-mapping i portalen.
+Oppsett (engangs):
+- Opprett en Azure SQL-server + database (serverless) i portalen.
+- Sett `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD` (eller
+  `SQL_CONNECTION_STRING`) som app-innstillinger.
+- Åpne brannmuren: tillat *Azure-tjenester* (for Functions) og din egen IP (for
+  lokal utvikling) under SQL-serverens *Networking*.
+- Skjema og seeding (fire hytter + admin fra `ADMIN_EMAIL`) kjøres idempotent ved
+  første tilkobling — ingen manuell migrering nødvendig.
 
 Viktige hensyn:
-- **Én skriver om gangen.** SQLite tåler samtidige lesere, men skriving serialiseres.
-  Med WAL-modus (satt i `db.js`) og et lite familie-datasett er dette uproblematisk,
-  men sett gjerne funksjons-appens `maxConcurrentRequests`/skalering konservativt.
-- **Backup.** Ta jevnlig kopi av `.db`-filen (f.eks. en timer-trigget funksjon som
-  kopierer til en annen share eller Blob Storage).
+- **Samtidighet.** Azure SQL håndterer samtidige lesere/skrivere. Kritiske
+  lese-så-skrive-operasjoner (FCFS-booking og materialisering av faste utgifter)
+  kjøres i serialiserbare transaksjoner med `UPDLOCK, HOLDLOCK` (`withTx` i `db.js`)
+  for å hindre race-tilstander.
+- **Backup.** Azure SQL tar automatiske backups (point-in-time restore); ingen
+  egen backup-jobb nødvendig slik SQLite-fila krevde.
 
-Alternativer dersom skrivelast eller samtidighet vokser: Azure SQL, PostgreSQL
-Flexible Server, eller Cosmos DB. Datalaget er isolert i `api/src/db.js`, så et
-bytte påvirker ikke resten av API-et nevneverdig.
+Datalaget er isolert i `api/src/db.js`, så et framtidig bytte (f.eks. til
+PostgreSQL) påvirker i hovedsak bare den fila og SQL-dialekten i spørringene.
 
 ## Datamodell
 

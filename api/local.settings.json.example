@@ -3,7 +3,12 @@
   "Values": {
     "FUNCTIONS_WORKER_RUNTIME": "node",
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-    "SQLITE_DB_PATH": "./data/hytteportal.db",
+
+    "SQL_SERVER": "hytteportal.database.windows.net",
+    "SQL_DATABASE": "hytteportal",
+    "SQL_USER": "hytteadmin",
+    "SQL_PASSWORD": "",
+    "SQL_TRUST_CERT": "false",
 
     "ADMIN_EMAIL": "din-epost@example.com",
     "ADMIN_NAME": "Ditt Navn",
