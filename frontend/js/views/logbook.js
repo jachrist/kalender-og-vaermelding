@@ -74,6 +74,21 @@ export function logbookView(container, ctx) {
     const people = el("input.input", { type: "text", placeholder: "Hvem var der?", value: entry?.participants || "" });
     const body = el("textarea.input.md-textarea", { rows: "10", placeholder: "Skriv innlegget i markdown …" }, entry?.body || "");
 
+    // Husk siste markørposisjon i tekstfeltet — klikk på «Bilde»-knappen flytter
+    // fokus vekk fra feltet, så vi setter bildet inn der markøren sist var (eller
+    // på slutten hvis feltet ikke er berørt ennå).
+    let lastSel = { start: body.value.length, end: body.value.length };
+    const saveSel = () => { lastSel = { start: body.selectionStart, end: body.selectionEnd }; };
+    for (const ev of ["keyup", "mouseup", "input", "blur"]) body.addEventListener(ev, saveSel);
+    function insertAtSaved(text) {
+      const { start, end } = lastSel;
+      body.value = body.value.slice(0, start) + text + body.value.slice(end);
+      const pos = start + text.length;
+      lastSel = { start: pos, end: pos };
+      body.focus();
+      try { body.setSelectionRange(pos, pos); } catch { /* ignorer */ }
+    }
+
     const preview = el("div.logbook-body.md-preview", { hidden: true });
     const fileInput = el("input", { type: "file", accept: "image/*", hidden: true });
     fileInput.addEventListener("change", () => uploadPicked());
@@ -105,8 +120,8 @@ export function logbookView(container, ctx) {
       imgBtn.textContent = "⏳ Laster opp …";
       try {
         const { url } = await api.uploadImage(file);
-        insertAtCursor(body, `\n![](${url})\n`);
-        toast("Bilde lagt inn", "success");
+        insertAtSaved(`\n![](${url})\n`);
+        toast("Bilde lagt inn der markøren står", "success");
       } catch (err) {
         toast(err.message, "error");
       } finally {
@@ -155,14 +170,4 @@ export function logbookView(container, ctx) {
       }
     }
   }
-}
-
-// Setter inn tekst der markøren står i et textarea.
-function insertAtCursor(textarea, text) {
-  const start = textarea.selectionStart ?? textarea.value.length;
-  const end = textarea.selectionEnd ?? textarea.value.length;
-  textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
-  const pos = start + text.length;
-  textarea.selectionStart = textarea.selectionEnd = pos;
-  textarea.focus();
 }

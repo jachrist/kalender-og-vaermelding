@@ -5,7 +5,7 @@
 //  - Statiske filer (same-origin GET): network-first med cache-fallback, slik at
 //    oppdateringer forplanter seg uten byggsteg, men appen fungerer offline.
 
-const CACHE = "hytteportal-v3";
+const CACHE = "hytteportal-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
