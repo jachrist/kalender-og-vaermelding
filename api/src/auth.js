@@ -68,6 +68,12 @@ async function revokeToken(token) {
 }
 
 function bearerToken(request) {
+  // Azure Static Web Apps reserverer `Authorization`-headeren til sin egen
+  // innebygde auth og overstyrer den før den når managed functions. Derfor
+  // sendes vårt token primært i en egen header. Vi faller tilbake til
+  // Authorization: Bearer for lokal utvikling (direkte mot funksjonsverten).
+  const custom = request.headers.get("x-access-token");
+  if (custom) return custom.trim();
   const header = request.headers.get("authorization") || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : null;
@@ -101,4 +107,5 @@ module.exports = {
   requireAuth,
   requireAdmin,
   normalizeEmail,
+  bearerToken,
 };

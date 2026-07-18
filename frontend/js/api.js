@@ -1,6 +1,8 @@
 // API-klient mot Azure Functions-backenden. Håndterer token (localStorage) og
-// legger på Authorization-header. Ved 401 tømmes økten og en 'unauthorized'-hendelse
-// sendes ut slik at appen kan vise innloggingsskjermen.
+// sender det i X-Access-Token-headeren. (Authorization kan ikke brukes: Azure
+// Static Web Apps reserverer den til sin egen auth og overstyrer den før den når
+// managed functions.) Ved 401 tømmes økten og en 'unauthorized'-hendelse sendes
+// ut slik at appen kan vise innloggingsskjermen.
 
 const API_BASE =
   location.hostname === "localhost" || location.hostname === "127.0.0.1"
@@ -37,7 +39,7 @@ export const session = {
 async function request(path, { method = "GET", body, auth = true } = {}) {
   const headers = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (auth && session.token) headers["Authorization"] = `Bearer ${session.token}`;
+  if (auth && session.token) headers["X-Access-Token"] = session.token;
 
   const res = await fetch(`${API_BASE}${path}`, {
     method,

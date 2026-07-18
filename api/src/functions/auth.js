@@ -8,6 +8,7 @@ const {
   revokeToken,
   requireAuth,
   normalizeEmail,
+  bearerToken,
 } = require("../auth");
 const { sendOtpEmail } = require("../mail");
 
@@ -73,9 +74,7 @@ app.http("auth-logout", {
   authLevel: "anonymous",
   route: "auth/logout",
   handler: withHandler(async (request) => {
-    const header = request.headers.get("authorization") || "";
-    const token = header.replace(/^Bearer\s+/i, "").trim();
-    await revokeToken(token);
+    await revokeToken(bearerToken(request));
     return json({ ok: true });
   }),
 });
