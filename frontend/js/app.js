@@ -4,12 +4,16 @@ import { renderLogin } from "./auth.js";
 import { bookingView } from "./views/booking.js";
 import { purchasesView } from "./views/purchases.js";
 import { maintenanceView } from "./views/maintenance.js";
+import { logbookView } from "./views/logbook.js";
+import { chatView } from "./views/chat.js";
 import { adminView } from "./views/admin.js";
 
 const TABS = [
   { key: "bruk", label: "Bruk", icon: "📅", render: (c, ctx) => bookingView(c, ctx) },
   { key: "innkjop", label: "Innkjøp", icon: "🛒", render: (c, ctx) => purchasesView(c, ctx) },
   { key: "vedlikehold", label: "Vedlikehold", icon: "🔧", render: (c, ctx) => maintenanceView(c, ctx) },
+  { key: "hyttebok", label: "Hyttebok", icon: "📖", render: (c, ctx) => logbookView(c, ctx) },
+  { key: "chat", label: "Chat", icon: "💬", render: (c, ctx) => chatView(c, ctx), global: true },
   { key: "admin", label: "Admin", icon: "⚙️", render: (c) => adminView(c), adminOnly: true },
 ];
 
@@ -98,7 +102,7 @@ function renderActive() {
     btn.setAttribute("aria-selected", btn.dataset.tab === activeTab ? "true" : "false");
   }
   clear(contentEl);
-  if (!activeCabinId && !tab.adminOnly) {
+  if (!activeCabinId && !tab.adminOnly && !tab.global) {
     contentEl.append(el("p.muted.pad", {}, "Ingen hytter tilgjengelig."));
     return;
   }

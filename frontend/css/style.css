@@ -206,3 +206,65 @@ body {
 
 .recurring summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .recurring[open] summary { margin-bottom: 10px; }
+
+/* Generell to-kolonners rad (brukt i modaler) */
+.addrow { display: flex; gap: 8px; }
+.addrow > .field { flex: 1; }
+
+/* ---------- Modal: scroll ved høyt innhold ---------- */
+.modal { max-height: 88dvh; overflow-y: auto; }
+.modal--wide { max-width: 560px; }
+.btn--sm { padding: 6px 10px; font-size: 0.85rem; font-weight: 600; }
+
+/* ---------- Chat ---------- */
+.chat { display: flex; flex-direction: column; }
+.chat-list {
+  height: calc(100dvh - var(--topbar-h) - var(--tabbar-h) - 130px);
+  min-height: 220px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px; padding: 4px 2px;
+}
+.chat-compose { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
+.chat-input { margin-bottom: 0; resize: none; max-height: 120px; }
+.chat-compose .btn { flex-shrink: 0; }
+.chat-msg { max-width: 85%; }
+.chat-msg--mine { align-self: flex-end; }
+.chat-meta { font-size: 0.7rem; color: var(--muted); margin: 0 6px 2px; }
+.chat-msg--mine .chat-meta { text-align: right; }
+.chat-bubble {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.chat-msg--mine .chat-bubble {
+  background: var(--booked); color: var(--booked-text); border-color: var(--booked-text);
+}
+
+/* ---------- Hyttebok ---------- */
+.logbook-entry { }
+.logbook-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.logbook-meta { min-width: 0; }
+.logbook-period { font-weight: 700; }
+.logbook-people { font-size: 0.9rem; margin-top: 2px; }
+.logbook-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.logbook-body { line-height: 1.55; overflow-wrap: anywhere; }
+.logbook-body > :first-child { margin-top: 0; }
+.logbook-body > :last-child { margin-bottom: 0; }
+.logbook-body p { margin: 6px 0; }
+.logbook-body h3, .logbook-body h4, .logbook-body h5 { margin: 12px 0 4px; line-height: 1.25; }
+.logbook-body ul, .logbook-body ol { margin: 6px 0; padding-left: 22px; }
+.logbook-body img { max-width: 100%; height: auto; border-radius: 8px; margin: 8px 0; display: block; }
+.logbook-body a { color: var(--accent); }
+.logbook-body code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+.logbook-body pre { background: var(--bg); padding: 10px; border-radius: 8px; overflow-x: auto; }
+.logbook-body pre code { background: none; padding: 0; }
+.logbook-body blockquote {
+  border-left: 3px solid var(--line); margin: 8px 0; padding: 2px 0 2px 12px; color: var(--muted);
+}
+
+/* ---------- Markdown-editor ---------- */
+.md-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
+.md-textarea { resize: vertical; min-height: 180px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+.md-preview {
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+  min-height: 180px; background: var(--bg); margin-bottom: 8px;
+}
+.md-hint { font-size: 0.75rem; margin: 0 0 8px; }

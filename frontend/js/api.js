@@ -63,6 +63,22 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
   return data;
 }
 
+// Rå binæropplasting (bilder) — sender fila som body med sin egen Content-Type.
+async function uploadRequest(path, file) {
+  const headers = { "Content-Type": file.type || "application/octet-stream" };
+  if (session.token) headers["X-Access-Token"] = session.token;
+
+  const res = await fetch(`${API_BASE}${path}`, { method: "POST", headers, body: file });
+  if (res.status === 401) {
+    session.clear();
+    window.dispatchEvent(new CustomEvent("unauthorized"));
+    throw new Error("Ikke innlogget");
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.error) || `Feil (${res.status})`);
+  return data;
+}
+
 export const api = {
   // Auth
   requestCode: (email) => request("/auth/request-code", { method: "POST", body: { email }, auth: false }),
@@ -85,6 +101,7 @@ export const api = {
     return request(`/cabins/${cabinId}/bookings${q}`);
   },
   createBooking: (cabinId, b) => request(`/cabins/${cabinId}/bookings`, { method: "POST", body: b }),
+  updateBooking: (id, patch) => request(`/bookings/${id}`, { method: "PATCH", body: patch }),
   deleteBooking: (id) => request(`/bookings/${id}`, { method: "DELETE" }),
 
   // Purchases
@@ -105,4 +122,17 @@ export const api = {
   createMaintenance: (cabinId, m) => request(`/cabins/${cabinId}/maintenance`, { method: "POST", body: m }),
   updateMaintenance: (id, patch) => request(`/maintenance/${id}`, { method: "PATCH", body: patch }),
   deleteMaintenance: (id) => request(`/maintenance/${id}`, { method: "DELETE" }),
+
+  // Chat (felles for alle)
+  chat: (after) => request(`/chat${after ? `?after=${encodeURIComponent(after)}` : ""}`),
+  sendChat: (body) => request("/chat", { method: "POST", body: { body } }),
+
+  // Hyttebok (per hytte)
+  logbook: (cabinId) => request(`/cabins/${cabinId}/logbook`),
+  createLogbook: (cabinId, e) => request(`/cabins/${cabinId}/logbook`, { method: "POST", body: e }),
+  updateLogbook: (id, patch) => request(`/logbook/${id}`, { method: "PATCH", body: patch }),
+  deleteLogbook: (id) => request(`/logbook/${id}`, { method: "DELETE" }),
+
+  // Bildeopplasting
+  uploadImage: (file) => uploadRequest("/uploads", file),
 };

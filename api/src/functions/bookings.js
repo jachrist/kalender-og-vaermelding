@@ -63,11 +63,22 @@ app.http("bookings-create", {
       return error(404, "Hytte ikke funnet");
     }
 
+    // Admin kan reservere på vegne av et annet medlem ("Book for andre").
+    let onBehalf = { id: member.id, name: member.name };
+    if (body.member_id && body.member_id !== member.id) {
+      if (member.role !== "admin") {
+        return error(403, "Bare en administrator kan reservere for andre");
+      }
+      const target = await queryOne("SELECT id, name FROM members WHERE id = ?", [body.member_id]);
+      if (!target) return error(400, "Ukjent medlem");
+      onBehalf = { id: target.id, name: target.name };
+    }
+
     const booking = {
       id: randomUUID(),
       cabin_id: cabinId,
-      member_id: member.id,
-      member_name: member.name,
+      member_id: onBehalf.id,
+      member_name: onBehalf.name,
       start_date: start,
       end_date: end,
       note,
@@ -97,6 +108,78 @@ app.http("bookings-create", {
       );
     }
     return json(booking, 201);
+  }),
+});
+
+// PATCH /api/bookings/{id} — eier eller admin kan endre datoer/notat.
+// Admin kan i tillegg flytte reservasjonen til et annet medlem (member_id).
+app.http("bookings-update", {
+  methods: ["PATCH"],
+  authLevel: "anonymous",
+  route: "bookings/{id}",
+  handler: withHandler(async (request) => {
+    const member = await requireAuth(request);
+    const id = request.params.id;
+    const body = (await request.json().catch(() => ({}))) || {};
+
+    const existing = await queryOne("SELECT * FROM bookings WHERE id = ?", [id]);
+    if (!existing) return error(404, "Reservasjon ikke funnet");
+    if (existing.member_id !== member.id && member.role !== "admin") {
+      return error(403, "Bare den som reserverte eller en administrator kan endre");
+    }
+
+    let start = existing.start_date;
+    let end = existing.end_date;
+    let note = existing.note;
+    let memberId = existing.member_id;
+    let memberName = existing.member_name;
+
+    if (body.start_date !== undefined) {
+      start = String(body.start_date).trim();
+      if (!validDate(start)) return error(400, "Ugyldig startdato");
+    }
+    if (body.end_date !== undefined) {
+      end = String(body.end_date).trim();
+      if (!validDate(end)) return error(400, "Ugyldig sluttdato");
+    }
+    if (end < start) return error(400, "Sluttdato kan ikke være før startdato");
+    if (body.note !== undefined) note = body.note ? String(body.note).trim() : null;
+
+    if (body.member_id !== undefined && body.member_id !== existing.member_id) {
+      if (member.role !== "admin") {
+        return error(403, "Bare en administrator kan flytte reservasjonen til et annet medlem");
+      }
+      const target = await queryOne("SELECT id, name FROM members WHERE id = ?", [body.member_id]);
+      if (!target) return error(400, "Ukjent medlem");
+      memberId = target.id;
+      memberName = target.name;
+    }
+
+    // Overlappsjekk (ekskl. denne reservasjonen) + oppdatering, atomisk.
+    const clash = await withTx(async (q) => {
+      const rows = await q(
+        `SELECT id, member_name, start_date, end_date FROM bookings WITH (UPDLOCK, HOLDLOCK)
+         WHERE cabin_id = @cabin_id AND id <> @id
+           AND start_date <= @end_date AND end_date >= @start_date`,
+        { cabin_id: existing.cabin_id, id, start_date: start, end_date: end }
+      );
+      if (rows[0]) return rows[0];
+      await q(
+        `UPDATE bookings SET member_id = @member_id, member_name = @member_name,
+                start_date = @start_date, end_date = @end_date, note = @note
+         WHERE id = @id`,
+        { id, member_id: memberId, member_name: memberName, start_date: start, end_date: end, note }
+      );
+      return null;
+    });
+
+    if (clash) {
+      return error(
+        409,
+        `Opptatt: ${clash.member_name} har reservert ${clash.start_date}–${clash.end_date}`
+      );
+    }
+    return json(await queryOne("SELECT * FROM bookings WHERE id = ?", [id]));
   }),
 });
 
