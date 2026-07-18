@@ -38,6 +38,7 @@ export function logbookView(container, ctx) {
         el("article.card.logbook-entry", {},
           el("div.logbook-head", {},
             el("div.logbook-meta", {},
+              e.title ? el("h3.logbook-title", {}, e.title) : null,
               period ? el("div.logbook-period", {}, `📅 ${period}`) : null,
               e.participants ? el("div.logbook-people", {}, `👥 ${e.participants}`) : null,
               el("div.row-sub", {}, `skrevet av ${e.created_by_name}`)
@@ -69,6 +70,7 @@ export function logbookView(container, ctx) {
 
   // --- Editor (nytt eller eksisterende innlegg) ---
   function openEditor(entry) {
+    const titleInput = el("input.input", { type: "text", maxlength: "300", placeholder: "Overskrift", value: entry?.title || "" });
     const from = el("input.input", { type: "date", value: entry?.period_from || "" });
     const to = el("input.input", { type: "date", value: entry?.period_to || "" });
     const people = el("input.input", { type: "text", placeholder: "Hvem var der?", value: entry?.participants || "" });
@@ -133,6 +135,7 @@ export function logbookView(container, ctx) {
     const dialog = el("div.modal-backdrop", { onclick: (e) => { if (e.target === dialog) dialog.remove(); } },
       el("div.modal.modal--wide", {},
         el("h3", {}, entry ? "Rediger innlegg" : "Nytt innlegg"),
+        el("label.field", {}, "Overskrift", titleInput),
         el("div.addrow", {},
           el("label.field", {}, "Fra", from),
           el("label.field", {}, "Til", to)
@@ -151,9 +154,12 @@ export function logbookView(container, ctx) {
     body.focus();
 
     async function submit() {
+      const heading = titleInput.value.trim();
+      if (!heading) return toast("Skriv en overskrift", "error");
       const text = body.value.trim();
       if (!text) return toast("Innlegget kan ikke være tomt", "error");
       const payload = {
+        title: heading,
         period_from: from.value || undefined,
         period_to: to.value || undefined,
         participants: people.value.trim() || undefined,

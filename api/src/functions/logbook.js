@@ -19,10 +19,10 @@ app.http("logbook-list", {
   handler: withHandler(async (request) => {
     await requireAuth(request);
     const rows = await query(
-      `SELECT id, cabin_id, member_id, created_by_name, period_from, period_to,
+      `SELECT id, cabin_id, member_id, created_by_name, title, period_from, period_to,
               participants, body, created_at, updated_at
        FROM logbook_entries WHERE cabin_id = ?
-       ORDER BY CASE WHEN period_from IS NULL THEN 1 ELSE 0 END, period_from DESC, created_at DESC`,
+       ORDER BY CASE WHEN period_from IS NULL THEN 1 ELSE 0 END, period_from ASC, created_at ASC`,
       [request.params.cabinId]
     );
     return json(rows);
@@ -38,7 +38,10 @@ app.http("logbook-create", {
     const member = await requireAuth(request);
     const cabinId = request.params.cabinId;
     const data = (await request.json().catch(() => ({}))) || {};
+    const title = String(data.title || "").trim();
     const body = String(data.body || "").trim();
+    if (!title) return error(400, "Overskrift er påkrevd");
+    if (title.length > 300) return error(400, "Overskriften er for lang");
     if (!body) return error(400, "Innlegget kan ikke være tomt");
     if (body.length > MAX_BODY) return error(400, "Innlegget er for langt");
 
@@ -50,6 +53,7 @@ app.http("logbook-create", {
       cabin_id: cabinId,
       member_id: member.id,
       created_by_name: member.name,
+      title,
       period_from: cleanDate(data.period_from),
       period_to: cleanDate(data.period_to),
       participants: data.participants ? String(data.participants).trim() : null,
@@ -57,8 +61,8 @@ app.http("logbook-create", {
     };
     await exec(
       `INSERT INTO logbook_entries
-         (id, cabin_id, member_id, created_by_name, period_from, period_to, participants, body)
-       VALUES (@id, @cabin_id, @member_id, @created_by_name, @period_from, @period_to, @participants, @body)`,
+         (id, cabin_id, member_id, created_by_name, title, period_from, period_to, participants, body)
+       VALUES (@id, @cabin_id, @member_id, @created_by_name, @title, @period_from, @period_to, @participants, @body)`,
       entry
     );
     return json(await queryOne("SELECT * FROM logbook_entries WHERE id = ?", [entry.id]), 201);
@@ -80,6 +84,12 @@ app.http("logbook-update", {
       return error(403, "Bare den som skrev innlegget eller en administrator kan redigere");
     }
 
+    if (data.title !== undefined) {
+      const t = String(data.title).trim();
+      if (!t) return error(400, "Overskrift er påkrevd");
+      if (t.length > 300) return error(400, "Overskriften er for lang");
+      await exec("UPDATE logbook_entries SET title = ? WHERE id = ?", [t, id]);
+    }
     if (data.body !== undefined) {
       const b = String(data.body).trim();
       if (!b) return error(400, "Innlegget kan ikke være tomt");
