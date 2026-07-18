@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Syntaks-sjekk alle JS-filer
+        run: |
+          set -e
+          find frontend/js api/src -name '*.js' -print0 | xargs -0 -I{} node --check "{}"
+          echo "Alle JS-filer OK"
+
+      - name: Valider JSON
+        run: |
+          set -e
+          for f in frontend/manifest.webmanifest frontend/staticwebapp.config.json \
+                   api/host.json api/package.json api/local.settings.json.example; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" && echo "ok  $f"
+          done
+
+      - name: Kjør tester
+        run: node --test frontend/test/dates.test.mjs api/test/schema.test.mjs
