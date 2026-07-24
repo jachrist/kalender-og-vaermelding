@@ -10,6 +10,9 @@ yarn-error.log*
 /data/
 api/data/
 
+# Frontend buntes inn i api/ kun under deploy (workflow) — ikke commit
+api/frontend/
+
 # Miljø / hemmeligheter
 .env
 .env.*
