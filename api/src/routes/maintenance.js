@@ -1,4 +1,4 @@
-const { app } = require("@azure/functions");
+const router = require("express").Router();
 const { randomUUID } = require("node:crypto");
 const { query, queryOne, exec } = require("../db");
 const { json, error, withHandler } = require("../http");
@@ -7,34 +7,30 @@ const { requireAuth } = require("../auth");
 const STATUSES = ["open", "in_progress", "done"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-// GET /api/cabins/{cabinId}/maintenance — vedlikeholdsoppgaver for hytta.
-app.http("maintenance-list", {
-  methods: ["GET"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/maintenance",
-  handler: withHandler(async (request) => {
-    await requireAuth(request);
+// GET /api/cabins/:cabinId/maintenance — vedlikeholdsoppgaver for hytta.
+router.get(
+  "/cabins/:cabinId/maintenance",
+  withHandler(async (req) => {
+    await requireAuth(req);
     const rows = await query(
       `SELECT id, cabin_id, title, description, status, due_date,
               created_by, created_by_name, updated_at, created_at
        FROM maintenance WHERE cabin_id = ?
        ORDER BY CASE status WHEN 'done' THEN 1 ELSE 0 END,
                 CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date, created_at DESC`,
-      [request.params.cabinId]
+      [req.params.cabinId]
     );
     return json(rows);
-  }),
-});
+  })
+);
 
-// POST /api/cabins/{cabinId}/maintenance  { title, description?, status?, due_date? }
-app.http("maintenance-create", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/maintenance",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const cabinId = request.params.cabinId;
-    const body = (await request.json().catch(() => ({}))) || {};
+// POST /api/cabins/:cabinId/maintenance  { title, description?, status?, due_date? }
+router.post(
+  "/cabins/:cabinId/maintenance",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const cabinId = req.params.cabinId;
+    const body = req.body || {};
     const title = String(body.title || "").trim();
     if (!title) return error(400, "Feltet 'title' er påkrevd");
 
@@ -60,18 +56,16 @@ app.http("maintenance-create", {
       item
     );
     return json(await queryOne("SELECT * FROM maintenance WHERE id = ?", [item.id]), 201);
-  }),
-});
+  })
+);
 
-// PATCH /api/maintenance/{id} — alle medlemmer kan redigere.
-app.http("maintenance-update", {
-  methods: ["PATCH"],
-  authLevel: "anonymous",
-  route: "maintenance/{id}",
-  handler: withHandler(async (request) => {
-    await requireAuth(request);
-    const id = request.params.id;
-    const body = (await request.json().catch(() => ({}))) || {};
+// PATCH /api/maintenance/:id — alle medlemmer kan redigere.
+router.patch(
+  "/maintenance/:id",
+  withHandler(async (req) => {
+    await requireAuth(req);
+    const id = req.params.id;
+    const body = req.body || {};
     if (!(await queryOne("SELECT id FROM maintenance WHERE id = ?", [id]))) {
       return error(404, "Oppgave ikke funnet");
     }
@@ -95,20 +89,20 @@ app.http("maintenance-update", {
         id,
       ]);
     }
-    await exec("UPDATE maintenance SET updated_at = SYSUTCDATETIME() WHERE id = ?", [id]);
+    await exec("UPDATE maintenance SET updated_at = datetime('now') WHERE id = ?", [id]);
     return json(await queryOne("SELECT * FROM maintenance WHERE id = ?", [id]));
-  }),
-});
+  })
+);
 
-// DELETE /api/maintenance/{id} — alle medlemmer kan slette.
-app.http("maintenance-delete", {
-  methods: ["DELETE"],
-  authLevel: "anonymous",
-  route: "maintenance/{id}",
-  handler: withHandler(async (request) => {
-    await requireAuth(request);
-    const changes = await exec("DELETE FROM maintenance WHERE id = ?", [request.params.id]);
+// DELETE /api/maintenance/:id — alle medlemmer kan slette.
+router.delete(
+  "/maintenance/:id",
+  withHandler(async (req) => {
+    await requireAuth(req);
+    const changes = await exec("DELETE FROM maintenance WHERE id = ?", [req.params.id]);
     if (changes === 0) return error(404, "Oppgave ikke funnet");
     return json({ ok: true });
-  }),
-});
+  })
+);
+
+module.exports = router;

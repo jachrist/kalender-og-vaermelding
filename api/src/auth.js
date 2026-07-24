@@ -3,9 +3,9 @@
 // - OTP: 6-sifret kode, 10 min levetid. Lagres kun som SHA-256-hash.
 // - Token: tilfeldig opak streng lagret som hash i 'tokens'-tabellen, 30 dagers
 //   levetid. Klienten lagrer selve tokenet i localStorage og sender det som
-//   'Authorization: Bearer <token>'.
+//   'X-Access-Token' (eller 'Authorization: Bearer <token>').
 //
-// Alle funksjoner er async fordi datalaget (Azure SQL) er asynkront.
+// Datalaget (SQLite) eksponeres async, så alle funksjoner her er async.
 
 const { randomUUID, randomBytes, createHash } = require("node:crypto");
 const { query, queryOne, exec } = require("./db");
@@ -32,7 +32,7 @@ async function createOtp(email) {
   const code = sixDigitCode();
   await exec(
     `INSERT INTO otp_codes (id, email, code_hash, expires_at)
-     VALUES (?, ?, ?, DATEADD(minute, ${OTP_TTL_MIN}, SYSUTCDATETIME()))`,
+     VALUES (?, ?, ?, datetime('now', '+${OTP_TTL_MIN} minutes'))`,
     [randomUUID(), normalizeEmail(email), sha256(code)]
   );
   return code;
@@ -42,9 +42,9 @@ async function createOtp(email) {
 async function verifyOtp(email, code) {
   const e = normalizeEmail(email);
   const row = await queryOne(
-    `SELECT TOP 1 id FROM otp_codes
-     WHERE email = ? AND code_hash = ? AND expires_at > SYSUTCDATETIME()
-     ORDER BY created_at DESC`,
+    `SELECT id FROM otp_codes
+     WHERE email = ? AND code_hash = ? AND expires_at > datetime('now')
+     ORDER BY created_at DESC LIMIT 1`,
     [e, sha256(String(code || "").trim())]
   );
   if (!row) throw new HttpError(401, "Ugyldig eller utløpt kode");
@@ -56,7 +56,7 @@ async function issueToken(memberId) {
   const token = randomBytes(32).toString("base64url");
   await exec(
     `INSERT INTO tokens (token_hash, member_id, expires_at)
-     VALUES (?, ?, DATEADD(day, ${TOKEN_TTL_DAYS}, SYSUTCDATETIME()))`,
+     VALUES (?, ?, datetime('now', '+${TOKEN_TTL_DAYS} days'))`,
     [sha256(token), memberId]
   );
   return token;
@@ -68,13 +68,12 @@ async function revokeToken(token) {
 }
 
 function bearerToken(request) {
-  // Azure Static Web Apps reserverer `Authorization`-headeren til sin egen
-  // innebygde auth og overstyrer den før den når managed functions. Derfor
-  // sendes vårt token primært i en egen header. Vi faller tilbake til
-  // Authorization: Bearer for lokal utvikling (direkte mot funksjonsverten).
-  const custom = request.headers.get("x-access-token");
-  if (custom) return custom.trim();
-  const header = request.headers.get("authorization") || "";
+  // Express: req.headers er et vanlig objekt med små bokstaver i nøklene.
+  // Vi godtar både X-Access-Token og Authorization: Bearer (klienten sender
+  // primært X-Access-Token av historiske grunner fra SWA-tiden).
+  const custom = request.headers["x-access-token"];
+  if (custom) return String(custom).trim();
+  const header = request.headers["authorization"] || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : null;
 }
@@ -86,7 +85,7 @@ async function requireAuth(request) {
   const member = await queryOne(
     `SELECT m.id, m.email, m.name, m.role
      FROM tokens t JOIN members m ON m.id = t.member_id
-     WHERE t.token_hash = ? AND t.expires_at > SYSUTCDATETIME()`,
+     WHERE t.token_hash = ? AND t.expires_at > datetime('now')`,
     [sha256(token)]
   );
   if (!member) throw new HttpError(401, "Ugyldig eller utløpt token");

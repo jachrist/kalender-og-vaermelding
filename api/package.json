@@ -1,18 +1,18 @@
 {
-  "name": "hytteportal-api",
-  "version": "0.1.0",
-  "description": "Azure Functions API for Hytteportal (Node v4-modell, SQLite).",
+  "name": "hytteportal",
+  "version": "0.3.0",
+  "description": "Node/Express-server (API + statisk frontend) for Hytteportal, med SQLite.",
   "private": true,
-  "main": "src/functions/*.js",
+  "main": "server.js",
   "scripts": {
-    "start": "func start",
-    "test": "echo \"ingen tester ennå\" && exit 0"
+    "start": "node server.js",
+    "test": "node --test test/schema.test.mjs ../frontend/test/dates.test.mjs"
   },
   "dependencies": {
-    "@azure/functions": "^4.5.0",
-    "@azure/storage-blob": "^12.33.0",
-    "heic-convert": "^2.1.0",
-    "mssql": "^11.0.1"
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "heic-convert": "^2.1.0"
   },
   "engines": {
     "node": ">=18"

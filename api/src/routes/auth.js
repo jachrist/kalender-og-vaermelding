@@ -1,4 +1,4 @@
-const { app } = require("@azure/functions");
+const router = require("express").Router();
 const { queryOne } = require("../db");
 const { json, error, withHandler } = require("../http");
 const {
@@ -14,12 +14,10 @@ const { sendOtpEmail } = require("../mail");
 
 // POST /api/auth/request-code  { email }
 // Sender engangskode hvis e-posten er et registrert medlem.
-app.http("auth-request-code", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "auth/request-code",
-  handler: withHandler(async (request, context) => {
-    const { email } = (await request.json().catch(() => ({}))) || {};
+router.post(
+  "/auth/request-code",
+  withHandler(async (req) => {
+    const { email } = req.body || {};
     const e = normalizeEmail(email);
     if (!e) return error(400, "Feltet 'email' er påkrevd");
 
@@ -30,18 +28,16 @@ app.http("auth-request-code", {
     }
 
     const code = await createOtp(e);
-    await sendOtpEmail(e, code, context);
+    await sendOtpEmail(e, code, console);
     return json({ ok: true, message: "Engangskode sendt" });
-  }),
-});
+  })
+);
 
 // POST /api/auth/verify  { email, code }  ->  { token, member }
-app.http("auth-verify", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "auth/verify",
-  handler: withHandler(async (request) => {
-    const { email, code } = (await request.json().catch(() => ({}))) || {};
+router.post(
+  "/auth/verify",
+  withHandler(async (req) => {
+    const { email, code } = req.body || {};
     const e = normalizeEmail(email);
     if (!e || !code) return error(400, "Feltene 'email' og 'code' er påkrevd");
 
@@ -54,27 +50,25 @@ app.http("auth-verify", {
     await verifyOtp(e, code); // kaster 401 ved feil
     const token = await issueToken(member.id);
     return json({ token, member });
-  }),
-});
+  })
+);
 
 // GET /api/auth/me  ->  innlogget medlem
-app.http("auth-me", {
-  methods: ["GET"],
-  authLevel: "anonymous",
-  route: "auth/me",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
+router.get(
+  "/auth/me",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
     return json({ member });
-  }),
-});
+  })
+);
 
 // POST /api/auth/logout
-app.http("auth-logout", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "auth/logout",
-  handler: withHandler(async (request) => {
-    await revokeToken(bearerToken(request));
+router.post(
+  "/auth/logout",
+  withHandler(async (req) => {
+    await revokeToken(bearerToken(req));
     return json({ ok: true });
-  }),
-});
+  })
+);
+
+module.exports = router;

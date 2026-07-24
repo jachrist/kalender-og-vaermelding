@@ -36,11 +36,12 @@ medlemsvelger, og flytte/endre eksisterende reservasjoner).
 - Brukerregister med **navn og e-post**. Kun registrerte e-poster kan logge inn.
 - Innlogging med **6-sifret engangskode** (10 min levetid) sendt på e-post.
 - Ved verifisering utstedes et **token** som lagres i `localStorage` og sendes som
-  `Authorization: Bearer …`. All tilgangskontroll håndheves **server-side**.
+  `X-Access-Token` (eller `Authorization: Bearer …`). All tilgangskontroll håndheves
+  **server-side**.
 - Roller: `admin` og `member`. Første administrator seedes fra `ADMIN_EMAIL`.
-- E-post sendes via **Microsoft Graph** (`sendMail`) på samme M365-tenant som Azure
-  Functions kjører på (se miljøvariabler under). Uten Graph-konfig logges koden i
-  stedet — praktisk for lokal utvikling.
+- E-post sendes via **Microsoft Graph** (`sendMail`) på en M365-tenant (se
+  miljøvariabler under). Uten Graph-konfig logges koden i stedet — praktisk for
+  lokal utvikling.
 
 ## Teknisk stack
 
@@ -48,12 +49,14 @@ medlemsvelger, og flytte/endre eksisterende reservasjoner).
 |-----------|--------------------------------------------------------------|
 | Frontend  | Ren HTML/CSS/JS PWA i browser — ingen rammeverk, ingen byggsteg |
 | PWA       | `manifest.webmanifest` + service worker (`sw.js`), offline   |
-| API       | Node på **Azure Functions** (v4 programmeringsmodell)        |
-| Lagring   | **Azure SQL Database** (serverless) via `mssql`             |
+| API       | Node med **Express** — serverer også den statiske frontend-en |
+| Hosting   | **Azure App Service** (Linux, Node) — kjører fint på Free (F1) |
+| Lagring   | **SQLite** via `better-sqlite3`, på App Service sin vedvarende `/home`-disk |
+| Bilder    | Lagres på disk under `/uploads` (samme vedvarende `/home`-disk) |
 | E-post    | Microsoft Graph `sendMail` (client credentials)              |
 
 Se [`docs/arkitektur.md`](docs/arkitektur.md) for detaljer, datamodell og
-oppsett av Azure SQL.
+persistens.
 
 ## Struktur
 
@@ -72,74 +75,63 @@ frontend/
     views/booking.js       # Kalender-booking
     views/purchases.js     # Handleliste + faste utgifter
     views/maintenance.js   # Vedlikehold
+    views/logbook.js       # Hyttebok (markdown + bilder)
+    views/chat.js          # Felles chat
     views/admin.js         # Medlemsadministrasjon
   icons/                   # App-ikoner (se icons/README.md)
 
-api/                       # Azure Functions (Node, v4-modell)
-  host.json
+api/                       # Node/Express-server
+  server.js                # Express-app: serverer /api, /uploads og statisk frontend
   package.json
-  local.settings.json.example
+  .env.example
   src/
-    db.js                  # Azure SQL-lag: pool, async query-hjelpere, skjema, seeding
+    db.js                  # SQLite-lag: async query/queryOne/exec/withTx, skjema, seeding
     auth.js                # OTP + token + requireAuth/requireAdmin
     mail.js                # Microsoft Graph sendMail
-    http.js                # Respons-hjelpere + feilhåndtering
+    storage.js             # Lagring av opplastede bilder på disk (/uploads)
+    http.js                # Respons-hjelpere + feilhåndtering (withHandler)
     recurring.js           # Materialisering av faste utgifter
-    functions/
+    routes/
+      index.js             # Samler alle ruter under /api
       health.js            # GET  /api/health
       auth.js              # POST /api/auth/request-code | verify | me | logout
       members.js           # /api/members (admin)
       cabins.js            # GET  /api/cabins
-      bookings.js          # /api/cabins/{id}/bookings, DELETE /api/bookings/{id}
-      purchases.js         # /api/cabins/{id}/purchases, PATCH/DELETE /api/purchases/{id}
-      recurring.js         # faste utgifter + timer + POST /api/recurring/run
-      maintenance.js       # /api/cabins/{id}/maintenance
+      bookings.js          # /api/cabins/:id/bookings, PATCH/DELETE /api/bookings/:id
+      purchases.js         # /api/cabins/:id/purchases, PATCH/DELETE /api/purchases/:id
+      recurring.js         # faste utgifter + POST /api/recurring/run
+      maintenance.js       # /api/cabins/:id/maintenance
+      chat.js              # /api/chat
+      logbook.js           # /api/cabins/:id/logbook, PATCH/DELETE /api/logbook/:id
+      uploads.js           # POST /api/uploads (bilder)
 
 docs/arkitektur.md
 ```
 
 ## Utvikling lokalt
 
-### API (Azure Functions)
-Krever [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-functions/functions-run-local) og Node 18+.
+Krever kun **Node 18+**. Én prosess serverer både API og frontend:
 
 ```bash
 cd api
 npm install
-cp local.settings.json.example local.settings.json   # fyll inn SQL_* + ADMIN_EMAIL m.m.
-npm start                                             # func start -> http://localhost:7071
+cp .env.example .env      # fyll inn ADMIN_EMAIL m.m.
+npm start                 # -> http://localhost:3000
 ```
 
-Lokal utvikling kobler mot en Azure SQL-database (samme som prod, eller en egen
-dev-database). Fyll inn `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER` og `SQL_PASSWORD`
-i `local.settings.json`, og åpne brannmuren i Azure SQL for din IP (Azure-portalen
-→ SQL-server → *Networking*). Skjema og de fire hyttene opprettes automatisk ved
-første oppstart. Uten Graph-variabler skrives engangskoden til konsollen i stedet
-for e-post.
-
-### Frontend
-Server `frontend/` statisk:
-
-```bash
-cd frontend
-python3 -m http.server 3000      # eller: npx serve .
-```
-
-`js/api.js` peker automatisk mot `http://localhost:7071/api` når du kjører på
-localhost, og mot `/api` i produksjon.
+Åpne `http://localhost:3000`. `js/api.js` bruker alltid `/api` (samme origin).
+SQLite-filen, de fire hyttene og admin opprettes automatisk ved første oppstart.
+Uten Graph-variabler skrives engangskoden til **konsollen** i stedet for e-post.
 
 ## Miljøvariabler (API)
 
+Settes i `.env` lokalt, eller som *Application settings* i App Service.
+
 | Variabel               | Beskrivelse                                            |
 |------------------------|--------------------------------------------------------|
-| `SQL_SERVER`           | Azure SQL-server, f.eks. `hytteportal.database.windows.net` |
-| `SQL_DATABASE`         | Databasenavn (standard `hytteportal`)                  |
-| `SQL_USER`             | SQL-innlogging (bruker)                                 |
-| `SQL_PASSWORD`         | SQL-passord                                            |
-| `SQL_CONNECTION_STRING`| (valgfritt) hele tilkoblingsstrengen — overstyrer feltene over |
-| `SQL_TRUST_CERT`       | (valgfritt) `true` kun for lokal SQL Server m/selvsignert sert |
-| `BLOB_CONNECTION_STRING`| Tilkoblingsstreng til Azure Storage (bilder i Hytteboka)      |
-| `BLOB_CONTAINER`       | (valgfritt) blob-container, standard `hyttebok`               |
+| `PORT`                 | Port Express lytter på (App Service injiserer denne)   |
+| `SQLITE_DB_PATH`       | Sti til SQLite-fil (prod: `/home/data/hytteportal.db`) |
+| `UPLOAD_DIR`           | Katalog for opplastede bilder (prod: `/home/data/uploads`) |
 | `ADMIN_EMAIL`          | E-post som seedes som første administrator             |
 | `ADMIN_NAME`           | Visningsnavn for admin                                 |
 | `TENANT_ID`            | M365 tenant (directory) ID for Graph                   |
@@ -154,27 +146,25 @@ To GitHub Actions-workflows i `.github/workflows/`:
 
 - **`ci.yml`** — kjører ved hver push/PR: syntaks-sjekk av all JS, JSON-validering og
   testene (`node --test`). Krever ingen hemmeligheter — gir grønne haker med en gang.
-- **`azure-static-web-apps.yml`** — deployer frontend + API til **Azure Static Web Apps**.
+- **`azure-app-service.yml`** — bygger `api/node_modules` og deployer til **Azure App Service**.
 
 ### Sette opp deploy (engangsjobb)
 
-1. Opprett en **Static Web App** i Azure-portalen, velg **"Other"** som kilde (så Azure
-   ikke lager sin egen workflow — vi bruker den som ligger i repoet).
-2. Kopier deployment-token (SWA → *Manage deployment token*) og legg det inn som
-   repo-secret **`AZURE_STATIC_WEB_APPS_API_TOKEN`**
-   (GitHub → Settings → Secrets and variables → Actions).
-3. Sett app-innstillinger i SWA (*Configuration*): `SQL_SERVER`, `SQL_DATABASE`,
-   `SQL_USER`, `SQL_PASSWORD`, `BLOB_CONNECTION_STRING`, `ADMIN_EMAIL`, `TENANT_ID`,
-   `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `MAIL_SENDER`.
-4. Deploy skjer automatisk ved push til `main`, eller manuelt via **Run workflow**
-   (workflow_dispatch) fra hvilken som helst branch. SWA ruter `/api/*` til Functions
-   automatisk, så `API_BASE` blir `/api` uten ekstra konfig.
+1. Opprett en **App Service** (Linux, runtime *Node 20 LTS*) — **Free (F1)** holder.
+2. *Configuration → Application settings*: `SQLITE_DB_PATH=/home/data/hytteportal.db`,
+   `UPLOAD_DIR=/home/data/uploads`, `ADMIN_EMAIL`, `ADMIN_NAME`, samt Graph-variablene.
+3. *General settings → Startup Command*: `node api/server.js`.
+4. Last ned publish profile (*Get publish profile*) og legg innholdet som repo-secret
+   **`AZURE_WEBAPP_PUBLISH_PROFILE`**. Sett app-navnet i workflow-filen (`AZURE_WEBAPP_NAME`).
+5. Deploy skjer ved push til `main`, eller manuelt via **Run workflow**.
 
-> ℹ️ **Persistens:** Data ligger nå i **Azure SQL Database**, ikke på funksjonens
-> lokale disk. Dermed overlever alt (medlemmer, bookinger, innkjøp, vedlikehold)
-> cold start og ny deploy — også på SWA sine managed functions. Opprett Azure
-> SQL-databasen (serverless anbefales — auto-pauser når appen står stille) før
-> første deploy, og pek `SQL_*`-innstillingene dit. Se `docs/arkitektur.md`.
+> ✅ **Persistens:** App Service sin `/home`-disk er vedvarende (Azure Files-backet), så
+> SQLite-filen og opplastede bilder overlever restart og deploy. F1 er én instans, og
+> `better-sqlite3` serialiserer skriving — trygt ved denne trafikken. WAL-modus er på.
+>
+> ⚠️ **Cold start:** F1 har ikke *Always On*, så appen sovner etter ~20 min inaktivitet
+> og bruker noen sekunder på å våkne. Eget domene/SSL krever et betalt nivå. Se
+> `docs/arkitektur.md`.
 
 ## Status
 

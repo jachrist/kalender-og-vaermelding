@@ -1,26 +1,29 @@
-const { app } = require("@azure/functions");
+const express = require("express");
+const router = express.Router();
 const heicConvert = require("heic-convert");
 const { json, error, withHandler } = require("../http");
 const { requireAuth } = require("../auth");
-const { uploadImage, blobConfigured } = require("../blob");
+const { saveImage } = require("../storage");
 
 const MAX_BYTES = 12 * 1024 * 1024; // 12 MB (HEIC fra telefon kan være store)
 const HEIC_TYPES = new Set(["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"]);
 
+// Rå binæropplasting: les hele kroppen som Buffer uansett Content-Type.
+const rawBody = express.raw({ type: () => true, limit: "15mb" });
+
 // POST /api/uploads — last opp et bilde (rå bytes, Content-Type: image/*).
 // HEIC/HEIF (iPhone) konverteres automatisk til JPEG, siden nettlesere ikke kan
 // vise HEIC. Returnerer { url } til det lagrede bildet. Krever innlogging.
-app.http("uploads-image", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "uploads",
-  handler: withHandler(async (request) => {
-    await requireAuth(request);
-    if (!blobConfigured()) {
-      return error(503, "Bildeopplasting er ikke konfigurert på serveren");
-    }
-    const contentType = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    let buffer = Buffer.from(await request.arrayBuffer());
+router.post(
+  "/uploads",
+  rawBody,
+  withHandler(async (req) => {
+    await requireAuth(req);
+    const contentType = String(req.headers["content-type"] || "")
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
+    let buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     if (!buffer.length) return error(400, "Tomt bilde");
     if (buffer.length > MAX_BYTES) return error(413, "Bildet er for stort (maks 12 MB)");
 
@@ -35,10 +38,12 @@ app.http("uploads-image", {
     }
 
     try {
-      const url = await uploadImage(buffer, type);
+      const url = await saveImage(buffer, type);
       return json({ url }, 201);
     } catch (err) {
       return error(400, err.message);
     }
-  }),
-});
+  })
+);
+
+module.exports = router;

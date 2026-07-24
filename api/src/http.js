@@ -1,4 +1,7 @@
-// Små hjelpere for HTTP-responser i Azure Functions v4.
+// Små hjelpere for HTTP-responser i Express.
+//
+// Rutehandlere returnerer et objekt { status, jsonBody } (via json()/error()),
+// og withHandler() sender det til Express-responsen.
 
 function json(body, status = 200) {
   return { status, jsonBody: body };
@@ -16,17 +19,20 @@ class HttpError extends Error {
   }
 }
 
-// Wrapper som fanger HttpError og uventede feil til pene JSON-responser.
+// Wrapper som gjør en (req) => { status, jsonBody }-handler til en Express-handler
+// og fanger HttpError + uventede feil til pene JSON-responser.
 function withHandler(fn) {
-  return async (request, context) => {
+  return async (req, res) => {
     try {
-      return await fn(request, context);
+      const result = await fn(req);
+      if (!result) return res.status(204).end();
+      res.status(result.status || 200).json(result.jsonBody);
     } catch (err) {
       if (err instanceof HttpError) {
-        return error(err.status, err.message);
+        return res.status(err.status).json({ error: err.message });
       }
-      context.error("Uventet feil:", err);
-      return error(500, "Intern feil");
+      console.error("Uventet feil:", err);
+      res.status(500).json({ error: "Intern feil" });
     }
   };
 }
