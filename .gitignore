@@ -3,17 +3,12 @@ node_modules/
 npm-debug.log*
 yarn-error.log*
 
-# Azure Functions
-api/local.settings.json
-bin/
-obj/
-.python_packages/
-
-# SQLite databaser og data
+# SQLite databaser, data og opplastede bilder
 *.db
 *.db-shm
 *.db-wal
 /data/
+api/data/
 
 # Miljø / hemmeligheter
 .env

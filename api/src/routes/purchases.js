@@ -1,4 +1,4 @@
-const { app } = require("@azure/functions");
+const router = require("express").Router();
 const { randomUUID } = require("node:crypto");
 const { query, queryOne, exec } = require("../db");
 const { json, error, withHandler } = require("../http");
@@ -10,33 +10,29 @@ function parsePrice(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-// GET /api/cabins/{cabinId}/purchases — handleliste for hytta.
-app.http("purchases-list", {
-  methods: ["GET"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/purchases",
-  handler: withHandler(async (request) => {
-    await requireAuth(request);
+// GET /api/cabins/:cabinId/purchases — handleliste for hytta.
+router.get(
+  "/cabins/:cabinId/purchases",
+  withHandler(async (req) => {
+    await requireAuth(req);
     const rows = await query(
       `SELECT id, cabin_id, title, comment, price, bought, bought_by_name, bought_at,
               created_by, created_by_name, source, created_at
        FROM purchases WHERE cabin_id = ?
        ORDER BY bought, created_at DESC`,
-      [request.params.cabinId]
+      [req.params.cabinId]
     );
     return json(rows);
-  }),
-});
+  })
+);
 
-// POST /api/cabins/{cabinId}/purchases  { title, comment?, price? }
-app.http("purchases-create", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/purchases",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const cabinId = request.params.cabinId;
-    const body = (await request.json().catch(() => ({}))) || {};
+// POST /api/cabins/:cabinId/purchases  { title, comment?, price? }
+router.post(
+  "/cabins/:cabinId/purchases",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const cabinId = req.params.cabinId;
+    const body = req.body || {};
     const title = String(body.title || "").trim();
     if (!title) return error(400, "Feltet 'title' er påkrevd");
 
@@ -58,20 +54,18 @@ app.http("purchases-create", {
       item
     );
     return json(await queryOne("SELECT * FROM purchases WHERE id = ?", [item.id]), 201);
-  }),
-});
+  })
+);
 
-// PATCH /api/purchases/{id}
+// PATCH /api/purchases/:id
 //  - 'bought' kan settes av alle innloggede.
 //  - title/comment/price kan bare endres av eier eller admin.
-app.http("purchases-update", {
-  methods: ["PATCH"],
-  authLevel: "anonymous",
-  route: "purchases/{id}",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const id = request.params.id;
-    const body = (await request.json().catch(() => ({}))) || {};
+router.patch(
+  "/purchases/:id",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const id = req.params.id;
+    const body = req.body || {};
     const item = await queryOne("SELECT * FROM purchases WHERE id = ?", [id]);
     if (!item) return error(404, "Vare ikke funnet");
 
@@ -99,28 +93,26 @@ app.http("purchases-update", {
       const bought = body.bought ? 1 : 0;
       await exec(
         `UPDATE purchases SET bought = ?, bought_by_name = ?, bought_at = ? WHERE id = ?`,
-        [bought, bought ? member.name : null, bought ? new Date() : null, id]
+        [bought, bought ? member.name : null, bought ? new Date().toISOString() : null, id]
       );
     }
     return json(await queryOne("SELECT * FROM purchases WHERE id = ?", [id]));
-  }),
-});
+  })
+);
 
-// DELETE /api/purchases/{id} — eier eller admin.
-app.http("purchases-delete", {
-  methods: ["DELETE"],
-  authLevel: "anonymous",
-  route: "purchases/{id}",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const item = await queryOne("SELECT created_by FROM purchases WHERE id = ?", [
-      request.params.id,
-    ]);
+// DELETE /api/purchases/:id — eier eller admin.
+router.delete(
+  "/purchases/:id",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const item = await queryOne("SELECT created_by FROM purchases WHERE id = ?", [req.params.id]);
     if (!item) return error(404, "Vare ikke funnet");
     if (item.created_by !== member.id && member.role !== "admin") {
       return error(403, "Bare den som la inn varen eller en administrator kan slette");
     }
-    await exec("DELETE FROM purchases WHERE id = ?", [request.params.id]);
+    await exec("DELETE FROM purchases WHERE id = ?", [req.params.id]);
     return json({ ok: true });
-  }),
-});
+  })
+);
+
+module.exports = router;

@@ -17,14 +17,13 @@ jobs:
       - name: Syntaks-sjekk alle JS-filer
         run: |
           set -e
-          find frontend/js api/src -name '*.js' -print0 | xargs -0 -I{} node --check "{}"
+          find frontend/js api/src api/server.js -name '*.js' -print0 | xargs -0 -I{} node --check "{}"
           echo "Alle JS-filer OK"
 
       - name: Valider JSON
         run: |
           set -e
-          for f in frontend/manifest.webmanifest frontend/staticwebapp.config.json \
-                   api/host.json api/package.json api/local.settings.json.example; do
+          for f in frontend/manifest.webmanifest api/package.json; do
             node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" && echo "ok  $f"
           done
 

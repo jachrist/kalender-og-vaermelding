@@ -1,4 +1,4 @@
-const { app } = require("@azure/functions");
+const router = require("express").Router();
 const { randomUUID } = require("node:crypto");
 const { query, queryOne, exec, withTx } = require("../db");
 const { json, error, withHandler } = require("../http");
@@ -12,17 +12,15 @@ function validDate(s) {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
-// GET /api/cabins/{cabinId}/bookings?from=YYYY-MM-DD&to=YYYY-MM-DD
+// GET /api/cabins/:cabinId/bookings?from=YYYY-MM-DD&to=YYYY-MM-DD
 // Uten from/to returneres alle reservasjoner som ikke er avsluttet ennå.
-app.http("bookings-list", {
-  methods: ["GET"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/bookings",
-  handler: withHandler(async (request) => {
-    await requireAuth(request);
-    const cabinId = request.params.cabinId;
-    const from = request.query.get("from");
-    const to = request.query.get("to");
+router.get(
+  "/cabins/:cabinId/bookings",
+  withHandler(async (req) => {
+    await requireAuth(req);
+    const cabinId = req.params.cabinId;
+    const from = req.query.from;
+    const to = req.query.to;
 
     let sql =
       "SELECT id, cabin_id, member_id, member_name, start_date, end_date, note, created_at FROM bookings WHERE cabin_id = ?";
@@ -33,23 +31,21 @@ app.http("bookings-list", {
       args.push(to, from);
     } else {
       // Datoer lagres som 'YYYY-MM-DD'-strenger; sammenlign med dagens dato.
-      sql += " AND end_date >= CONVERT(char(10), GETDATE(), 23)";
+      sql += " AND end_date >= date('now')";
     }
     sql += " ORDER BY start_date";
     return json(await query(sql, args));
-  }),
-});
+  })
+);
 
-// POST /api/cabins/{cabinId}/bookings  { start_date, end_date, note? }
+// POST /api/cabins/:cabinId/bookings  { start_date, end_date, note?, member_id? }
 // First-come-first-serve: avvises ved overlapp med eksisterende reservasjon.
-app.http("bookings-create", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/bookings",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const cabinId = request.params.cabinId;
-    const body = (await request.json().catch(() => ({}))) || {};
+router.post(
+  "/cabins/:cabinId/bookings",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const cabinId = req.params.cabinId;
+    const body = req.body || {};
     const start = String(body.start_date || "").trim();
     const end = String(body.end_date || "").trim();
     const note = body.note ? String(body.note).trim() : null;
@@ -84,11 +80,11 @@ app.http("bookings-create", {
       note,
     };
 
-    // FCFS-overlappsjekk + insert i én serialiserbar transaksjon, med HOLDLOCK
-    // slik at to samtidige forsøk ikke begge slipper forbi sjekken.
+    // FCFS-overlappsjekk + insert i én transaksjon (BEGIN IMMEDIATE) slik at to
+    // samtidige forsøk ikke begge slipper forbi sjekken.
     const clash = await withTx(async (q) => {
       const rows = await q(
-        `SELECT id, member_name, start_date, end_date FROM bookings WITH (UPDLOCK, HOLDLOCK)
+        `SELECT id, member_name, start_date, end_date FROM bookings
          WHERE cabin_id = @cabin_id AND start_date <= @end_date AND end_date >= @start_date`,
         { cabin_id: cabinId, start_date: start, end_date: end }
       );
@@ -108,19 +104,17 @@ app.http("bookings-create", {
       );
     }
     return json(booking, 201);
-  }),
-});
+  })
+);
 
-// PATCH /api/bookings/{id} — eier eller admin kan endre datoer/notat.
+// PATCH /api/bookings/:id — eier eller admin kan endre datoer/notat.
 // Admin kan i tillegg flytte reservasjonen til et annet medlem (member_id).
-app.http("bookings-update", {
-  methods: ["PATCH"],
-  authLevel: "anonymous",
-  route: "bookings/{id}",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const id = request.params.id;
-    const body = (await request.json().catch(() => ({}))) || {};
+router.patch(
+  "/bookings/:id",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const id = req.params.id;
+    const body = req.body || {};
 
     const existing = await queryOne("SELECT * FROM bookings WHERE id = ?", [id]);
     if (!existing) return error(404, "Reservasjon ikke funnet");
@@ -158,7 +152,7 @@ app.http("bookings-update", {
     // Overlappsjekk (ekskl. denne reservasjonen) + oppdatering, atomisk.
     const clash = await withTx(async (q) => {
       const rows = await q(
-        `SELECT id, member_name, start_date, end_date FROM bookings WITH (UPDLOCK, HOLDLOCK)
+        `SELECT id, member_name, start_date, end_date FROM bookings
          WHERE cabin_id = @cabin_id AND id <> @id
            AND start_date <= @end_date AND end_date >= @start_date`,
         { cabin_id: existing.cabin_id, id, start_date: start, end_date: end }
@@ -180,24 +174,22 @@ app.http("bookings-update", {
       );
     }
     return json(await queryOne("SELECT * FROM bookings WHERE id = ?", [id]));
-  }),
-});
+  })
+);
 
-// DELETE /api/bookings/{id} — eier eller admin kan slette.
-app.http("bookings-delete", {
-  methods: ["DELETE"],
-  authLevel: "anonymous",
-  route: "bookings/{id}",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const booking = await queryOne("SELECT member_id FROM bookings WHERE id = ?", [
-      request.params.id,
-    ]);
+// DELETE /api/bookings/:id — eier eller admin kan slette.
+router.delete(
+  "/bookings/:id",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const booking = await queryOne("SELECT member_id FROM bookings WHERE id = ?", [req.params.id]);
     if (!booking) return error(404, "Reservasjon ikke funnet");
     if (booking.member_id !== member.id && member.role !== "admin") {
       return error(403, "Bare den som reserverte eller en administrator kan slette");
     }
-    await exec("DELETE FROM bookings WHERE id = ?", [request.params.id]);
+    await exec("DELETE FROM bookings WHERE id = ?", [req.params.id]);
     return json({ ok: true });
-  }),
-});
+  })
+);
+
+module.exports = router;

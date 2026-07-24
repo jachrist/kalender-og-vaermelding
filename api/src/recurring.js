@@ -2,8 +2,8 @@
 // (purchases) én gang per måned, når månedens dag har passert day_of_month.
 //
 // Idempotent: hver fast utgift har 'last_generated' = 'YYYY-MM' for måneden den
-// sist ble lagt inn, så den lages aldri dobbelt. Kalles fra timer-funksjonen
-// (daglig) og kan trigges manuelt av admin.
+// sist ble lagt inn, så den lages aldri dobbelt. Kalles ved oppstart + intervall
+// (server.js) og kan trigges manuelt av admin.
 
 const { randomUUID } = require("node:crypto");
 const { withTx } = require("./db");
@@ -16,7 +16,7 @@ async function generateDueRecurring(now) {
 
   return withTx(async (q) => {
     const due = await q(
-      `SELECT * FROM recurring_expenses WITH (UPDLOCK, HOLDLOCK)
+      `SELECT * FROM recurring_expenses
        WHERE active = 1
          AND day_of_month <= @dayOfMonth
          AND (last_generated IS NULL OR last_generated <> @month)`,

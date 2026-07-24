@@ -1,4 +1,4 @@
-const { app } = require("@azure/functions");
+const router = require("express").Router();
 const { randomUUID } = require("node:crypto");
 const { query, queryOne, exec } = require("../db");
 const { json, error, withHandler } = require("../http");
@@ -17,32 +17,28 @@ function clampDay(value) {
   return Math.min(28, Math.max(1, n)); // 1..28 for å unngå korte måneder
 }
 
-// GET /api/cabins/{cabinId}/recurring — faste utgifter for hytta.
-app.http("recurring-list", {
-  methods: ["GET"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/recurring",
-  handler: withHandler(async (request) => {
-    await requireAuth(request);
+// GET /api/cabins/:cabinId/recurring — faste utgifter for hytta.
+router.get(
+  "/cabins/:cabinId/recurring",
+  withHandler(async (req) => {
+    await requireAuth(req);
     const rows = await query(
       `SELECT id, cabin_id, title, comment, price, day_of_month, active,
               last_generated, created_by, created_by_name, created_at
        FROM recurring_expenses WHERE cabin_id = ? ORDER BY day_of_month, title`,
-      [request.params.cabinId]
+      [req.params.cabinId]
     );
     return json(rows);
-  }),
-});
+  })
+);
 
-// POST /api/cabins/{cabinId}/recurring  { title, comment?, price?, day_of_month? }
-app.http("recurring-create", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/recurring",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const cabinId = request.params.cabinId;
-    const body = (await request.json().catch(() => ({}))) || {};
+// POST /api/cabins/:cabinId/recurring  { title, comment?, price?, day_of_month? }
+router.post(
+  "/cabins/:cabinId/recurring",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const cabinId = req.params.cabinId;
+    const body = req.body || {};
     const title = String(body.title || "").trim();
     if (!title) return error(400, "Feltet 'title' er påkrevd");
 
@@ -66,18 +62,26 @@ app.http("recurring-create", {
       item
     );
     return json(await queryOne("SELECT * FROM recurring_expenses WHERE id = ?", [item.id]), 201);
-  }),
-});
+  })
+);
 
-// PATCH /api/recurring/{id} — eier eller admin.
-app.http("recurring-update", {
-  methods: ["PATCH"],
-  authLevel: "anonymous",
-  route: "recurring/{id}",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const id = request.params.id;
-    const body = (await request.json().catch(() => ({}))) || {};
+// POST /api/recurring/run — kjør materialisering manuelt (kun admin).
+router.post(
+  "/recurring/run",
+  withHandler(async (req) => {
+    await requireAdmin(req);
+    const count = await generateDueRecurring(new Date());
+    return json({ ok: true, generated: count });
+  })
+);
+
+// PATCH /api/recurring/:id — eier eller admin.
+router.patch(
+  "/recurring/:id",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const id = req.params.id;
+    const body = req.body || {};
     const item = await queryOne("SELECT created_by FROM recurring_expenses WHERE id = ?", [id]);
     if (!item) return error(404, "Fast utgift ikke funnet");
     if (item.created_by !== member.id && member.role !== "admin") {
@@ -107,46 +111,24 @@ app.http("recurring-update", {
       await exec("UPDATE recurring_expenses SET active = ? WHERE id = ?", [body.active ? 1 : 0, id]);
     }
     return json(await queryOne("SELECT * FROM recurring_expenses WHERE id = ?", [id]));
-  }),
-});
+  })
+);
 
-// DELETE /api/recurring/{id} — eier eller admin.
-app.http("recurring-delete", {
-  methods: ["DELETE"],
-  authLevel: "anonymous",
-  route: "recurring/{id}",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
+// DELETE /api/recurring/:id — eier eller admin.
+router.delete(
+  "/recurring/:id",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
     const item = await queryOne("SELECT created_by FROM recurring_expenses WHERE id = ?", [
-      request.params.id,
+      req.params.id,
     ]);
     if (!item) return error(404, "Fast utgift ikke funnet");
     if (item.created_by !== member.id && member.role !== "admin") {
       return error(403, "Bare den som la inn utgiften eller en administrator kan slette");
     }
-    await exec("DELETE FROM recurring_expenses WHERE id = ?", [request.params.id]);
+    await exec("DELETE FROM recurring_expenses WHERE id = ?", [req.params.id]);
     return json({ ok: true });
-  }),
-});
+  })
+);
 
-// POST /api/recurring/run — kjør materialisering manuelt (kun admin).
-app.http("recurring-run", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "recurring/run",
-  handler: withHandler(async (request) => {
-    await requireAdmin(request);
-    const count = await generateDueRecurring(new Date());
-    return json({ ok: true, generated: count });
-  }),
-});
-
-// Timer: kjør daglig kl. 06:00 og legg inn forfalte faste utgifter.
-// NCRONTAB: sekund minutt time dag måned ukedag
-app.timer("recurring-timer", {
-  schedule: "0 0 6 * * *",
-  handler: async (myTimer, context) => {
-    const count = await generateDueRecurring(new Date());
-    context.log(`[recurring] materialiserte ${count} faste utgifter`);
-  },
-});
+module.exports = router;

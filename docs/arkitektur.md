@@ -3,56 +3,49 @@
 ## Oversikt
 
 ```
-┌────────────────────┐        HTTPS         ┌──────────────────────┐
-│  PWA (frontend/)    │  ───────────────►    │  Azure Functions     │
-│  HTML/CSS/JS        │   /api/*             │  Node (v4-modell)     │
-│  Service worker     │  ◄───────────────    │  mssql-driver         │
-└────────────────────┘                       └──────────┬───────────┘
-                                                         │ TDS (kryptert)
-                                                 ┌───────▼────────────┐
-                                                 │  Azure SQL Database │
-                                                 │  (serverless)       │
-                                                 └─────────────────────┘
+┌────────────────────┐        HTTPS         ┌──────────────────────────┐
+│  PWA (frontend/)    │  ───────────────►    │  Azure App Service        │
+│  HTML/CSS/JS        │   /api/*, /uploads   │  Node + Express           │
+│  Service worker     │  ◄───────────────    │  (server.js)              │
+└────────────────────┘   statiske filer      └──────────┬───────────────┘
+                                                         │
+                                              ┌──────────▼───────────────┐
+                                              │  /home (vedvarende disk)  │
+                                              │  SQLite-fil + /uploads    │
+                                              └───────────────────────────┘
 ```
 
-- **Frontend** er en ren statisk PWA uten byggsteg. Kan hostes på Azure Static Web
-  Apps, en enkel nginx, eller hva som helst som serverer statiske filer.
-- **API** er Node på Azure Functions med v4-programmeringsmodellen (`app.http(...)`),
-  én fil per funksjonsområde under `api/src/functions/`.
-- **Lagring** er **Azure SQL Database** via `mssql` (Tedious) — en ren JS-driver
-  uten native modul. Datalaget er isolert i `api/src/db.js` bak et lite sett
-  async-hjelpere (`query`, `queryOne`, `exec`, `withTx`).
+- **Frontend** er en ren statisk PWA uten byggsteg, servert av Express (samme prosess).
+- **API** er Node med Express (`server.js`), én rutefil per funksjonsområde under
+  `api/src/routes/`. Samme prosess serverer `/api`, `/uploads` og de statiske filene.
+- **Lagring** er **SQLite** via `better-sqlite3`. Datalaget er isolert i
+  `api/src/db.js` bak et lite sett async-hjelpere (`query`, `queryOne`, `exec`,
+  `withTx`) — så et framtidig bytte påvirker i hovedsak bare den fila og SQL-dialekten.
 
-## Azure SQL — oppsett og persistens
+## App Service + SQLite — persistens
 
-Data ligger i en managed Azure SQL Database, ikke på funksjonens lokale disk.
-Dermed overlever alt cold start, deploy og utskalering — også på Static Web Apps
-sine managed functions.
-
-Anbefalt: **serverless**-nivå. Den auto-pauser når appen står stille (familie-app
-som er tom mesteparten av døgnet) og starter igjen ved neste kall. `db.js` bruker
-romslige connection/request-timeouts (60 s) nettopp fordi første kall etter en
-pause kan bruke noen sekunder på å vekke databasen.
+Databasefilen (`SQLITE_DB_PATH`) og opplastede bilder (`UPLOAD_DIR`) legges på App
+Service sin **`/home`-disk**, som er vedvarende (Azure Files-backet). Dermed overlever
+alt (medlemmer, bookinger, innkjøp, vedlikehold, hyttebok, chat, bilder) restart og
+deploy. Kjører fint på **Free (F1)**-nivået.
 
 Oppsett (engangs):
-- Opprett en Azure SQL-server + database (serverless) i portalen.
-- Sett `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD` (eller
-  `SQL_CONNECTION_STRING`) som app-innstillinger.
-- Åpne brannmuren: tillat *Azure-tjenester* (for Functions) og din egen IP (for
-  lokal utvikling) under SQL-serverens *Networking*.
+- Opprett App Service (Linux, Node 20). Startup Command: `node api/server.js`.
+- App settings: `SQLITE_DB_PATH=/home/data/hytteportal.db`,
+  `UPLOAD_DIR=/home/data/uploads`, `ADMIN_EMAIL`, samt Graph-variablene for e-post.
 - Skjema og seeding (fire hytter + admin fra `ADMIN_EMAIL`) kjøres idempotent ved
-  første tilkobling — ingen manuell migrering nødvendig.
+  første oppstart — ingen manuell migrering nødvendig.
 
 Viktige hensyn:
-- **Samtidighet.** Azure SQL håndterer samtidige lesere/skrivere. Kritiske
-  lese-så-skrive-operasjoner (FCFS-booking og materialisering av faste utgifter)
-  kjøres i serialiserbare transaksjoner med `UPDLOCK, HOLDLOCK` (`withTx` i `db.js`)
-  for å hindre race-tilstander.
-- **Backup.** Azure SQL tar automatiske backups (point-in-time restore); ingen
-  egen backup-jobb nødvendig slik SQLite-fila krevde.
-
-Datalaget er isolert i `api/src/db.js`, så et framtidig bytte (f.eks. til
-PostgreSQL) påvirker i hovedsak bare den fila og SQL-dialekten i spørringene.
+- **Samtidighet.** F1 er én instans, og `better-sqlite3` er synkront og serialiserer
+  skriving. Kritiske lese-så-skrive-operasjoner (FCFS-booking og materialisering av
+  faste utgifter) kjøres i en `BEGIN IMMEDIATE`-transaksjon (`withTx` i `db.js`).
+  WAL-modus er på. SQLite på `/home` (nettverksmontert) frarådes ved høy
+  skrive-samtidighet, men er trygt ved denne trafikken.
+- **Cold start.** F1 mangler *Always On* og sovner etter ~20 min inaktivitet; første
+  forespørsel deretter bruker noen sekunder på å starte Node på nytt.
+- **Backup.** SQLite er én fil — ta en periodisk kopi av `/home/data/` (f.eks. via en
+  scheduled WebJob eller ekstern sync) om dataene skal sikres utover App Service.
 
 ## Datamodell
 
@@ -68,15 +61,19 @@ Se `api/src/db.js` for autoritativt skjema (opprettes/migreres ved oppstart).
 | `purchases`          | id, cabin_id, title, comment, price, bought, bought_by_name, created_by, source |
 | `recurring_expenses` | id, cabin_id, title, comment, price, day_of_month, active, last_generated |
 | `maintenance`        | id, cabin_id, title, description, status, due_date, created_by         |
+| `chat_messages`      | id, member_id, member_name, body, created_at                           |
+| `logbook_entries`    | id, cabin_id, member_id, title, period_from, period_to, participants, body |
 
 De fire hyttene (Gartha rød, Gartha hvit, Gartha anneks, Skeikampen) seedes ved
-første oppstart. Alt domenedata knyttes til en `cabin_id`.
+første oppstart. Alt domenedata knyttes til en `cabin_id` (unntatt `chat_messages`,
+som er felles). Hyttebok-bilder lagres på disk under `/uploads` og refereres som
+URL i markdown-teksten (`body`).
 
 ### Faste utgifter
 `recurring_expenses` materialiseres til `purchases` (med `source = 'recurring'`)
 én gang per måned, når dagens dato har passert `day_of_month`. Idempotent via
-`last_generated` (`YYYY-MM`). Kjøres av en daglig timer-funksjon
-(`recurring-timer`) og kan trigges manuelt av admin (`POST /api/recurring/run`).
+`last_generated` (`YYYY-MM`). Kjøres ved oppstart og hver 6. time (`setInterval` i
+`server.js`) og kan trigges manuelt av admin (`POST /api/recurring/run`).
 
 ## Autentisering
 
@@ -86,14 +83,14 @@ Implementert med e-post-OTP og opake tokens — håndheves server-side:
 - **Engangskode**: 6 sifre, 10 min levetid, lagret kun som SHA-256-hash i `otp_codes`.
 - **Token**: tilfeldig streng (32 byte) lagret som hash i `tokens`, 30 dagers
   levetid. Klienten lagrer klartekst-tokenet i `localStorage` og sender det som
-  `Authorization: Bearer …`. `requireAuth`/`requireAdmin` i `api/src/auth.js`
-  validerer på hvert kall.
+  `X-Access-Token` (eller `Authorization: Bearer …`). `requireAuth`/`requireAdmin`
+  i `api/src/auth.js` validerer på hvert kall.
 - **Roller**: `admin` (full tilgang, medlemsforvaltning) og `member`. Første admin
   seedes fra `ADMIN_EMAIL`.
 
 ### E-post via Microsoft Graph
-Engangskoder sendes med Graph `sendMail` på samme M365-tenant som Functions kjører
-på, via client credentials (app-tillatelsen `Mail.Send`). Konfigureres med
+Engangskoder sendes med Graph `sendMail` på en M365-tenant, via client credentials
+(app-tillatelsen `Mail.Send`). Konfigureres med
 `TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` og `MAIL_SENDER`. Er ikke
 Graph konfigurert, logges koden i stedet (lokal utvikling uten hemmeligheter).
 

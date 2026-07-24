@@ -1,10 +1,9 @@
 // DB-uavhengige logikktester for domeneinvariantene som håndheves i SQL.
 //
-// Etter migreringen til Azure SQL kjøres selve spørringene mot en ekte database
-// (integrasjonstest, se README), men de underliggende predikatene — FCFS-overlapp
-// og forfall av faste utgifter — er ren logikk vi kan verifisere uten en DB.
-// Testene her speiler nøyaktig WHERE-betingelsene i src/functions/bookings.js og
-// src/recurring.js, så et avvik i logikken fanges opp i CI uten hemmeligheter.
+// De underliggende predikatene — FCFS-overlapp og forfall av faste utgifter — er
+// ren logikk vi kan verifisere uten en database. Testene her speiler nøyaktig
+// WHERE-betingelsene i src/routes/bookings.js og src/recurring.js, så et avvik i
+// logikken fanges opp i CI uten hemmeligheter.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 

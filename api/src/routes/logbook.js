@@ -1,4 +1,4 @@
-const { app } = require("@azure/functions");
+const router = require("express").Router();
 const { randomUUID } = require("node:crypto");
 const { query, queryOne, exec } = require("../db");
 const { json, error, withHandler } = require("../http");
@@ -11,33 +11,29 @@ function cleanDate(v) {
   return DATE_RE.test(v || "") ? v : null;
 }
 
-// GET /api/cabins/{cabinId}/logbook — hytteboka for valgt hytte, nyeste først.
-app.http("logbook-list", {
-  methods: ["GET"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/logbook",
-  handler: withHandler(async (request) => {
-    await requireAuth(request);
+// GET /api/cabins/:cabinId/logbook — hytteboka for valgt hytte.
+router.get(
+  "/cabins/:cabinId/logbook",
+  withHandler(async (req) => {
+    await requireAuth(req);
     const rows = await query(
       `SELECT id, cabin_id, member_id, created_by_name, title, period_from, period_to,
               participants, body, created_at, updated_at
        FROM logbook_entries WHERE cabin_id = ?
        ORDER BY CASE WHEN period_from IS NULL THEN 1 ELSE 0 END, period_from ASC, created_at ASC`,
-      [request.params.cabinId]
+      [req.params.cabinId]
     );
     return json(rows);
-  }),
-});
+  })
+);
 
-// POST /api/cabins/{cabinId}/logbook  { period_from?, period_to?, participants?, body }
-app.http("logbook-create", {
-  methods: ["POST"],
-  authLevel: "anonymous",
-  route: "cabins/{cabinId}/logbook",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const cabinId = request.params.cabinId;
-    const data = (await request.json().catch(() => ({}))) || {};
+// POST /api/cabins/:cabinId/logbook  { title, period_from?, period_to?, participants?, body }
+router.post(
+  "/cabins/:cabinId/logbook",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const cabinId = req.params.cabinId;
+    const data = req.body || {};
     const title = String(data.title || "").trim();
     const body = String(data.body || "").trim();
     if (!title) return error(400, "Overskrift er påkrevd");
@@ -66,18 +62,16 @@ app.http("logbook-create", {
       entry
     );
     return json(await queryOne("SELECT * FROM logbook_entries WHERE id = ?", [entry.id]), 201);
-  }),
-});
+  })
+);
 
-// PATCH /api/logbook/{id} — eier eller admin.
-app.http("logbook-update", {
-  methods: ["PATCH"],
-  authLevel: "anonymous",
-  route: "logbook/{id}",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const id = request.params.id;
-    const data = (await request.json().catch(() => ({}))) || {};
+// PATCH /api/logbook/:id — eier eller admin.
+router.patch(
+  "/logbook/:id",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const id = req.params.id;
+    const data = req.body || {};
     const entry = await queryOne("SELECT member_id FROM logbook_entries WHERE id = ?", [id]);
     if (!entry) return error(404, "Innlegg ikke funnet");
     if (entry.member_id !== member.id && member.role !== "admin") {
@@ -108,24 +102,24 @@ app.http("logbook-update", {
         id,
       ]);
     }
-    await exec("UPDATE logbook_entries SET updated_at = SYSUTCDATETIME() WHERE id = ?", [id]);
+    await exec("UPDATE logbook_entries SET updated_at = datetime('now') WHERE id = ?", [id]);
     return json(await queryOne("SELECT * FROM logbook_entries WHERE id = ?", [id]));
-  }),
-});
+  })
+);
 
-// DELETE /api/logbook/{id} — eier eller admin.
-app.http("logbook-delete", {
-  methods: ["DELETE"],
-  authLevel: "anonymous",
-  route: "logbook/{id}",
-  handler: withHandler(async (request) => {
-    const member = await requireAuth(request);
-    const entry = await queryOne("SELECT member_id FROM logbook_entries WHERE id = ?", [request.params.id]);
+// DELETE /api/logbook/:id — eier eller admin.
+router.delete(
+  "/logbook/:id",
+  withHandler(async (req) => {
+    const member = await requireAuth(req);
+    const entry = await queryOne("SELECT member_id FROM logbook_entries WHERE id = ?", [req.params.id]);
     if (!entry) return error(404, "Innlegg ikke funnet");
     if (entry.member_id !== member.id && member.role !== "admin") {
       return error(403, "Bare den som skrev innlegget eller en administrator kan slette");
     }
-    await exec("DELETE FROM logbook_entries WHERE id = ?", [request.params.id]);
+    await exec("DELETE FROM logbook_entries WHERE id = ?", [req.params.id]);
     return json({ ok: true });
-  }),
-});
+  })
+);
+
+module.exports = router;
