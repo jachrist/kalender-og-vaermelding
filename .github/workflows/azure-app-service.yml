@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_WEBAPP_NAME: hytteportal # <-- endre til ditt App Service-navn
+  AZURE_WEBAPP_NAME: hytteapp
   NODE_VERSION: "20"
 
 jobs:
