@@ -13,6 +13,7 @@ try {
 }
 
 const path = require("node:path");
+const fs = require("node:fs");
 const express = require("express");
 const routes = require("./src/routes");
 const { uploadsDir } = require("./src/storage");
@@ -32,8 +33,12 @@ app.use("/api", routes);
 // Opplastede bilder (Hyttebok)
 app.use("/uploads", express.static(uploadsDir()));
 
-// Statisk frontend
-const FRONTEND_DIR = path.join(__dirname, "..", "frontend");
+// Statisk frontend. Ved deploy til App Service buntes frontend inn i app-roten
+// (api/frontend); lokalt ligger den som søsken (../frontend).
+const bundledFrontend = path.join(__dirname, "frontend");
+const FRONTEND_DIR = fs.existsSync(bundledFrontend)
+  ? bundledFrontend
+  : path.join(__dirname, "..", "frontend");
 app.use(express.static(FRONTEND_DIR));
 
 // SPA-fallback: alt som ikke er /api, /uploads eller en eksisterende fil -> index.html.

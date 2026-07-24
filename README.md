@@ -152,11 +152,14 @@ To GitHub Actions-workflows i `.github/workflows/`:
 
 1. Opprett en **App Service** (Linux, runtime *Node 20 LTS*) — **Free (F1)** holder.
 2. *Configuration → Application settings*: `SQLITE_DB_PATH=/home/data/hytteportal.db`,
-   `UPLOAD_DIR=/home/data/uploads`, `ADMIN_EMAIL`, `ADMIN_NAME`, samt Graph-variablene.
-3. *General settings → Startup Command*: `node api/server.js`.
+   `UPLOAD_DIR=/home/data/uploads`, **`SCM_DO_BUILD_DURING_DEPLOYMENT=true`**,
+   `ADMIN_EMAIL`, `ADMIN_NAME`, samt Graph-variablene.
+3. *General settings → Startup Command*: `node server.js`.
 4. Last ned publish profile (*Get publish profile*) og legg innholdet som repo-secret
    **`AZURE_WEBAPP_PUBLISH_PROFILE`**. Sett app-navnet i workflow-filen (`AZURE_WEBAPP_NAME`).
-5. Deploy skjer ved push til `main`, eller manuelt via **Run workflow**.
+5. Deploy skjer ved push til `main`, eller manuelt via **Run workflow**. Workflowen
+   deployer `api/`-mappa (med frontend buntet inn) og lar **Oryx** kjøre `npm install`
+   på serveren — da bygges `better-sqlite3` for riktig Node-versjon (unngår ABI-feil).
 
 > ✅ **Persistens:** App Service sin `/home`-disk er vedvarende (Azure Files-backet), så
 > SQLite-filen og opplastede bilder overlever restart og deploy. F1 er én instans, og

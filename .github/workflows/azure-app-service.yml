@@ -1,21 +1,23 @@
 # Deploy av Hytteportal til Azure App Service (Linux, Node).
 #
+# Vi deployer api/-mappa som app-rot og lar App Service (Oryx) kjøre `npm install`
+# på serveren. Da bygges/hentes den native modulen better-sqlite3 for NØYAKTIG den
+# Node-versjonen App Service kjører — så vi unngår ABI-mismatch (som oppstår hvis
+# binæren bygges på GitHub-runneren og kjøres på en annen Node på App Service).
+#
 # Engangsoppsett før første deploy:
 #   1. Opprett en App Service (Linux, runtime "Node 20 LTS"), gjerne på Free (F1).
 #   2. App Service -> Configuration -> Application settings:
 #        SQLITE_DB_PATH = /home/data/hytteportal.db   (vedvarende /home-disk)
 #        UPLOAD_DIR     = /home/data/uploads          (vedvarende /home-disk)
+#        SCM_DO_BUILD_DURING_DEPLOYMENT = true         (la Oryx bygge på serveren)
 #        ADMIN_EMAIL, ADMIN_NAME
 #        TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET, MAIL_SENDER  (for e-post)
-#   3. General settings -> Startup Command:  node api/server.js
-#      (package.json ligger i api/, mens frontend/ serveres relativt derfra.)
+#   3. General settings -> Startup Command:  node server.js
+#      (api/ er app-rot, så server.js ligger på rota av wwwroot.)
 #   4. Last ned publish profile (App Service -> "Get publish profile") og legg
 #      innholdet som repo-secret AZURE_WEBAPP_PUBLISH_PROFILE.
 #   5. Sett app-navnet under 'env.AZURE_WEBAPP_NAME' nedenfor.
-#
-# Denne workflowen bygger api/node_modules (inkl. better-sqlite3) på GitHub-runneren
-# — begge er Linux x64 / Node 20, så den kompilerte binæren kjører på App Service.
-# Hele repoet (med api/node_modules og frontend/) pakkes og lastes opp.
 
 name: Azure App Service
 
@@ -26,7 +28,6 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: hytteapp
-  NODE_VERSION: "20"
 
 jobs:
   build_and_deploy:
@@ -34,17 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+      # Bunt frontend inn i api/ så hele appen (API + statiske filer) deployes
+      # fra én app-rot. server.js foretrekker api/frontend når den finnes.
+      - name: Bunt frontend inn i api/
+        run: cp -r frontend api/frontend
 
-      - name: Installer avhengigheter
-        working-directory: api
-        run: npm ci --omit=dev || npm install --omit=dev
-
+      # Deploy api/-mappa (uten node_modules) — Oryx kjører npm install på serveren.
       - name: Deploy til Azure App Service
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .
+          package: api
