@@ -40,8 +40,9 @@ Viktige hensyn:
 - **Samtidighet.** F1 er én instans, og `better-sqlite3` er synkront og serialiserer
   skriving. Kritiske lese-så-skrive-operasjoner (FCFS-booking og materialisering av
   faste utgifter) kjøres i en `BEGIN IMMEDIATE`-transaksjon (`withTx` i `db.js`).
-  WAL-modus er på. SQLite på `/home` (nettverksmontert) frarådes ved høy
-  skrive-samtidighet, men er trygt ved denne trafikken.
+  Journal-modus er `DELETE` (rollback), **ikke** WAL — WAL krever delt minne
+  (mmap) som ikke støttes på Azure Files (`/home`). SQLite på nettverksmontert
+  disk frarådes ved høy skrive-samtidighet, men er trygt ved denne trafikken.
 - **Cold start.** F1 mangler *Always On* og sovner etter ~20 min inaktivitet; første
   forespørsel deretter bruker noen sekunder på å starte Node på nytt.
 - **Backup.** SQLite er én fil — ta en periodisk kopi av `/home/data/` (f.eks. via en

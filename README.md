@@ -160,7 +160,8 @@ To GitHub Actions-workflows i `.github/workflows/`:
 
 > ✅ **Persistens:** App Service sin `/home`-disk er vedvarende (Azure Files-backet), så
 > SQLite-filen og opplastede bilder overlever restart og deploy. F1 er én instans, og
-> `better-sqlite3` serialiserer skriving — trygt ved denne trafikken. WAL-modus er på.
+> `better-sqlite3` serialiserer skriving — trygt ved denne trafikken. Bruker
+> rollback-journal (`DELETE`), ikke WAL, siden WAL ikke fungerer på Azure Files.
 >
 > ⚠️ **Cold start:** F1 har ikke *Always On*, så appen sovner etter ~20 min inaktivitet
 > og bruker noen sekunder på å våkne. Eget domene/SSL krever et betalt nivå. Se

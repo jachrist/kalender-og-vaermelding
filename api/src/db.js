@@ -30,7 +30,10 @@ function getDb() {
     process.env.SQLITE_DB_PATH || path.join(__dirname, "..", "data", "hytteportal.db");
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
+  // MERK: WAL-modus krever delt minne (mmap) som IKKE støttes på Azure Files
+  // (/home på App Service, CIFS). Bruk rollback-journal (DELETE) som virker på
+  // nettverksmonterte filsystemer. F1 er én instans, så WAL trengs ikke.
+  db.pragma("journal_mode = DELETE");
   db.pragma("foreign_keys = ON");
   migrate(db);
   seed(db);
